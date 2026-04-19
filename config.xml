@@ -2,7 +2,9 @@
 <widget id="com.example.eiscamera" version="1.1.0" 
         xmlns="http://www.w3.org/ns/widgets" 
         xmlns:cdv="http://cordova.apache.org/ns/1.0"
-        xmlns:android="http://schemas.android.com/apk/res/android"> <name>EIS Camera Pro</name>
+        xmlns:android="http://schemas.android.com/apk/res/android">
+        
+    <name>EIS Camera Pro</name>
     <description>Стабилизация видео со звуком</description>
     <author email="dev@example.com">Creator</author>
     <content src="index.html" />
@@ -19,10 +21,7 @@
 
     <platform name="android">
         <config-file target="AndroidManifest.xml" parent="/*">
-            <uses-permission android:name="android.permission.CAMERA" />
-            <uses-permission android:name="android.permission.RECORD_AUDIO" />
             <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-            <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
         </config-file>
     </platform>
 </widget>
