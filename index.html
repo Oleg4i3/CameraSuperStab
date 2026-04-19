@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EIS Camera Pro</title>
+    <style>
+        body { font-family: sans-serif; background: #000; color: #fff; margin: 0; padding: 10px; text-align: center; }
+        canvas { width: 100%; max-width: 480px; border: 1px solid #444; border-radius: 8px; margin-top: 10px; }
+        .controls { background: #222; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        .row { display: flex; justify-content: space-between; align-items: center; margin: 12px 0; gap: 10px; }
+        button { flex: 1; padding: 12px; font-size: 16px; border: none; border-radius: 6px; color: white; cursor: pointer; }
+        .btn-primary { background: #007bff; }
+        .btn-danger { background: #dc3545; }
+        .btn-record { background: #28a745; font-weight: bold; }
+        .btn-record.recording { background: #ff0000; animation: blink 1s infinite; }
+        label { min-width: 50px; text-align: left; font-size: 14px;}
+        input[type="range"] { flex: 2; }
+        .val-badge { background: #444; padding: 3px 6px; border-radius: 4px; font-family: monospace; font-size: 14px; min-width: 40px; }
+        video { display: none; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+    <div id="loading" style="color:#ffcc00; margin:20px;">Загрузка движка...</div>
+    
+    <div class="controls">
+        <div class="row">
+            <button id="startBtn" class="btn-primary" disabled>Включить камеру</button>
+            <button id="resetBtn" class="btn-danger" disabled>Сброс фокуса</button>
+        </div>
+        <div class="row">
+            <button id="recordBtn" class="btn-record" disabled>🔴 Начать запись</button>
+        </div>
+        <hr style="border-color: #444; margin: 15px 0;">
+        <div class="row">
+            <label>Дрейф:</label>
+            <input type="range" id="driftSlider" min="0" max="0.1" step="0.001" value="0.03">
+            <span class="val-badge" id="driftVal">0.03</span>
+        </div>
+        <div class="row">
+            <label>Зум:</label>
+            <input type="range" id="zoomSlider" min="1.0" max="4.0" step="0.1" value="1.5">
+            <span class="val-badge" id="zoomVal">1.5x</span>
+        </div>
+    </div>
+
+    <canvas id="canvasOutput" width="640" height="480"></canvas>
+    <video id="videoElement" width="640" height="480" autoplay playsinline></video>
+
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();"></script>
+
+    <script>
+        const video = document.getElementById('videoElement');
+        const canvasOutput = document.getElementById('canvasOutput');
+        const startBtn = document.getElementById('startBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const recordBtn = document.getElementById('recordBtn');
+        
+        const zoomSlider = document.getElementById('zoomSlider');
+        const zoomValText = document.getElementById('zoomVal');
+        const driftSlider = document.getElementById('driftSlider');
+        const driftValText = document.getElementById('driftVal');
+        
+        let isStreaming = false;
+        let referenceFrame = null, template = null;
+        const WIDTH = 640, HEIGHT = 480, TMPL_W = 150, TMPL_H = 150;
+        const IDEAL_X = (WIDTH - TMPL_W) / 2, IDEAL_Y = (HEIGHT - TMPL_H) / 2;
+        let virtualX = IDEAL_X, virtualY = IDEAL_Y;
+        
+        let currentZoom = 1.5;
+        let currentDriftSpeed = 0.03;
+
+        // Переменные для записи
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isRecording = false;
+
+        // Обработчики ползунков
+        zoomSlider.addEventListener('input', (e) => {
+            currentZoom = parseFloat(e.target.value);
+            zoomValText.innerText = currentZoom.toFixed(1) + 'x';
+        });
+
+        driftSlider.addEventListener('input', (e) => {
+            currentDriftSpeed = parseFloat(e.target.value);
+            driftValText.innerText = currentDriftSpeed.toFixed(3);
+        });
+
+        function onOpenCvReady() {
+            document.getElementById('loading').style.display = 'none';
+            startBtn.disabled = false;
+        }
+
+        startBtn.addEventListener('click', startCamera);
+        resetBtn.addEventListener('click', resetAnchor);
+        
+        recordBtn.addEventListener('click', () => {
+            if (!isRecording) startRecording();
+            else stopRecording();
+        });
+
+        function resetAnchor() {
+            if (referenceFrame) {
+                referenceFrame.delete(); template.delete();
+                referenceFrame = null; template = null;
+                virtualX = IDEAL_X; virtualY = IDEAL_Y;
+            }
+        }
+
+        function startCamera() {
+            navigator.mediaDevices.getUserMedia({ 
+                video: { width: { ideal: WIDTH }, height: { ideal: HEIGHT }, facingMode: "environment" }, 
+                audio: false 
+            }).then(stream => {
+                video.srcObject = stream; video.play();
+                isStreaming = true;
+                startBtn.style.display = 'none';
+                resetBtn.disabled = false;
+                recordBtn.disabled = false;
+                video.onloadeddata = () => processVideo();
+            }).catch(err => alert("Ошибка камеры: " + err));
+        }
+
+        // Логика записи видео с Canvas
+        function startRecording() {
+            recordedChunks = [];
+            const stream = canvasOutput.captureStream(30);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            
+            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = saveVideo;
+            
+            mediaRecorder.start();
+            isRecording = true;
+            recordBtn.innerText = "⏹ Остановить запись";
+            recordBtn.classList.add("recording");
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            isRecording = false;
+            recordBtn.innerText = "🔴 Начать запись";
+            recordBtn.classList.remove("recording");
+        }
+
+        function saveVideo() {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = 'stabilized_lecture_' + Date.now() + '.webm';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        }
+
+        function processVideo() {
+            if (!isStreaming) return;
+            let src = new cv.Mat(HEIGHT, WIDTH, cv.CV_8UC4);
+            let gray = new cv.Mat(), result = new cv.Mat(), mask = new cv.Mat();
+            let cap = new cv.VideoCapture(video);
+
+            function processFrame() {
+                try {
+                    let begin = Date.now();
+                    cap.read(src);
+                    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                    if (!referenceFrame) {
+                        referenceFrame = gray.clone();
+                        template = referenceFrame.roi(new cv.Rect(IDEAL_X, IDEAL_Y, TMPL_W, TMPL_H)).clone();
+                    }
+
+                    cv.matchTemplate(gray, template, result, cv.TM_CCOEFF_NORMED, mask);
+                    let minMax = cv.minMaxLoc(result, mask);
+                    
+                    if (minMax.maxVal < 0.4) {
+                        resetAnchor(); setTimeout(processFrame, 0); return;
+                    }
+
+                    let matchX = minMax.maxLoc.x; let matchY = minMax.maxLoc.y;
+                    let dx = matchX - virtualX; let dy = matchY - virtualY;
+                    
+                    // Дрейф: учитываем динамическое значение со слайдера
+                    virtualX += (matchX - virtualX) * currentDriftSpeed;
+                    virtualY += (matchY - virtualY) * currentDriftSpeed;
+
+                    // Отрисовка метки фокуса (красная рамка патча) на исходном кадре ДО стабилизации
+                    let p1 = new cv.Point(matchX, matchY);
+                    let p2 = new cv.Point(matchX + TMPL_W, matchY + TMPL_H);
+                    cv.rectangle(src, p1, p2, new cv.Scalar(255, 0, 0, 255), 3);
+
+                    // Стабилизация
+                    let M = cv.matFromArray(2, 3, cv.CV_64FC1, [1, 0, -dx, 0, 1, -dy]);
+                    let stabilizedSrc = new cv.Mat();
+                    cv.warpAffine(src, stabilizedSrc, M, new cv.Size(WIDTH, HEIGHT), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0,0,0,255));
+
+                    // Кроп и зум
+                    let cropRatio = 1.0 / currentZoom;
+                    let cropW = Math.floor(WIDTH * cropRatio);
+                    let cropH = Math.floor(HEIGHT * cropRatio);
+                    let startX = Math.max(0, Math.floor((WIDTH - cropW) / 2));
+                    let startY = Math.max(0, Math.floor((HEIGHT - cropH) / 2));
+                    
+                    let outputCropped = stabilizedSrc.roi(new cv.Rect(startX, startY, cropW, cropH));
+                    let outputResized = new cv.Mat();
+                    cv.resize(outputCropped, outputResized, new cv.Size(WIDTH, HEIGHT), 0, 0, cv.INTER_LINEAR);
+
+                    // Вывод на экран
+                    cv.imshow('canvasOutput', outputResized);
+
+                    // Очистка памяти
+                    M.delete(); stabilizedSrc.delete(); outputCropped.delete(); outputResized.delete();
+                    
+                    let delay = 1000/30 - (Date.now() - begin);
+                    setTimeout(processFrame, delay > 0 ? delay : 0);
+                } catch (err) {}
+            }
+            setTimeout(processFrame, 0);
+        }
+    </script>
+</body>
+</html>
