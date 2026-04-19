@@ -31,6 +31,10 @@ jobs:
         run: |
           cordova create app com.example.eiscamera "EIS Camera"
           cp index.html app/www/
+          
+          # Скачиваем OpenCV внутрь приложения (оффлайн режим)
+          curl -s -o app/www/opencv.js https://docs.opencv.org/4.8.0/opencv.js
+          
           cp config.xml app/
           cd app
           cordova platform add android
