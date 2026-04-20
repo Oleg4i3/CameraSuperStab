@@ -110,22 +110,49 @@
             }
         };
 
-        function startCameraStream() {
-            navigator.mediaDevices.getUserMedia({ 
+		
+		function startCameraStream() {
+            // Настройки: отключаем шумоподавление, чтобы WebView не капризничал
+            const constraints = {
                 video: { width: 640, height: 480, facingMode: "environment" },
-                audio: true 
-            }).then(stream => {
-                mainStream = stream;
-                video.srcObject = stream;
-                video.play();
-                isStreaming = true;
-                startBtn.style.display = 'none';
-                resetBtn.disabled = false;
-                recordBtn.disabled = false;
-                video.onloadeddata = () => processVideo();
-            }).catch(err => alert("Ошибка доступа: " + err));
+                audio: { echoCancellation: false, noiseSuppression: false }
+            };
+
+            // Попытка 1: Запуск со звуком
+            navigator.mediaDevices.getUserMedia(constraints)
+                .then(stream => {
+                    initStream(stream, true);
+                })
+                .catch(err => {
+                    console.warn("Ошибка микрофона: ", err);
+                    
+                    // Попытка 2: Запасной план (только видео)
+                    navigator.mediaDevices.getUserMedia({ video: constraints.video, audio: false })
+                        .then(stream => {
+                            alert("Запущено без звука! Микрофон заблокирован Android или занят другим приложением.");
+                            initStream(stream, false);
+                        })
+                        .catch(err2 => alert("Критическая ошибка доступа: " + err2));
+                });
         }
 
+        // Вспомогательная функция для запуска
+        function initStream(stream, hasAudio) {
+            mainStream = stream;
+            video.srcObject = stream;
+            video.play();
+            isStreaming = true;
+            startBtn.style.display = 'none';
+            resetBtn.disabled = false;
+            recordBtn.disabled = false;
+            
+            if (!hasAudio) {
+                recordBtn.innerText = "🔴 ЗАПИСЬ (БЕЗ ЗВУКА)";
+            }
+            
+            video.onloadeddata = () => processVideo();
+        }
+		
         resetBtn.onclick = () => {
             if (referenceFrame) {
                 referenceFrame.delete(); template.delete();
