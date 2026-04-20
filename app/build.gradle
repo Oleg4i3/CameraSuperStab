@@ -31,5 +31,5 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:${camerax_version}"
     implementation "androidx.camera:camera-view:${camerax_version}"
     
-    implementation 'com.github.iamareebjamal:opencv-android:4.3.0'
+    implementation 'com.github.iamareebjamal:opencv-android:4.3.0@aar'
 }
