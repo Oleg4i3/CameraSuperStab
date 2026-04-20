@@ -1,0 +1,254 @@
+name: 4. Fix Performance, UI and Architecture
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix_and_build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Optimize APK Size (Leave only arm64)
+        run: |
+          sed -i '/defaultConfig {/a \        ndk { abiFilters "arm64-v8a" }' app/build.gradle
+
+      - name: Rewrite UI (activity_main.xml)
+        run: |
+          cat << 'EOF' > app/src/main/res/layout/activity_main.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <androidx.constraintlayout.widget.ConstraintLayout 
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:app="http://schemas.android.com/apk/res-auto"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="#000000">
+
+              <androidx.camera.view.PreviewView
+                  android:id="@+id/previewView"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent" />
+
+              <View
+                  android:id="@+id/cropFrame"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:layout_margin="40dp"
+                  android:background="@drawable/frame_border"
+                  app:layout_constraintTop_toTopOf="parent"
+                  app:layout_constraintBottom_toBottomOf="parent"
+                  app:layout_constraintStart_toStartOf="parent"
+                  app:layout_constraintEnd_toEndOf="parent" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="#80000000"
+                  android:padding="16dp"
+                  app:layout_constraintBottom_toBottomOf="parent">
+
+                  <TextView android:text="Сглаживание (Дрейф)" android:textColor="#FFF" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                  <SeekBar android:id="@+id/seekSmoothing" android:max="100" android:progress="80" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+                  <TextView android:id="@+id/tvFpsInfo" android:text="FPS: -- | Сдвиг: X:0 Y:0" android:textColor="#0F0" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp"/>
+                  
+                  <Button android:id="@+id/btnReset" android:text="Сбросить якорь" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"/>
+              </LinearLayout>
+          </androidx.constraintlayout.widget.ConstraintLayout>
+          EOF
+
+      - name: Create Frame Drawable
+        run: |
+          mkdir -p app/src/main/res/drawable
+          cat << 'EOF' > app/src/main/res/drawable/frame_border.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <stroke android:width="2dp" android:color="#00FF00" />
+              <solid android:color="#00000000" />
+          </shape>
+          EOF
+
+      - name: Rewrite Logic (MainActivity.kt)
+        run: |
+          cat << 'EOF' > app/src/main/java/com/example/eiscamera/MainActivity.kt
+          package com.example.eiscamera
+
+          import android.Manifest
+          import android.content.pm.PackageManager
+          import android.os.Bundle
+          import android.util.Size
+          import android.widget.Toast
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.camera.core.*
+          import androidx.camera.lifecycle.ProcessCameraProvider
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
+          import com.example.eiscamera.databinding.ActivityMainBinding
+          import org.opencv.android.OpenCVLoader
+          import org.opencv.core.CvType
+          import org.opencv.core.Mat
+          import org.opencv.imgproc.Imgproc
+          import java.util.concurrent.ExecutorService
+          import java.util.concurrent.Executors
+
+          class MainActivity : AppCompatActivity() {
+              private lateinit var binding: ActivityMainBinding
+              private lateinit var cameraExecutor: ExecutorService
+
+              private var anchorFrame: Mat? = null
+              private var cumulativeShiftX = 0f
+              private var cumulativeShiftY = 0f
+              
+              private var lastTime = System.currentTimeMillis()
+              private var frameCount = 0
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  binding = ActivityMainBinding.inflate(layoutInflater)
+                  setContentView(binding.root)
+
+                  if (!OpenCVLoader.initDebug()) {
+                      Toast.makeText(this, "OpenCV Init Failed", Toast.LENGTH_LONG).show()
+                  }
+
+                  // Увеличиваем Preview, чтобы при сдвиге не было черных краев
+                  binding.previewView.scaleX = 1.3f
+                  binding.previewView.scaleY = 1.3f
+
+                  binding.btnReset.setOnClickListener {
+                      anchorFrame = null
+                      cumulativeShiftX = 0f
+                      cumulativeShiftY = 0f
+                      binding.previewView.translationX = 0f
+                      binding.previewView.translationY = 0f
+                  }
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                      startCamera()
+                  } else {
+                      ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 10)
+                  }
+
+                  cameraExecutor = Executors.newSingleThreadExecutor()
+              }
+
+              private fun startCamera() {
+                  val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+                  cameraProviderFuture.addListener({
+                      val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+
+                      val preview = Preview.Builder().build().also {
+                          it.setSurfaceProvider(binding.previewView.surfaceProvider)
+                      }
+
+                      // Ограничиваем разрешение анализа для скорости
+                      val imageAnalyzer = ImageAnalysis.Builder()
+                          .setTargetResolution(Size(640, 480))
+                          .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                          .build()
+                          .also {
+                              it.setAnalyzer(cameraExecutor, { image -> processImage(image) })
+                          }
+
+                      val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                      try {
+                          cameraProvider.unbindAll()
+                          cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
+                      } catch(exc: Exception) { }
+                  }, ContextCompat.getMainExecutor(this))
+              }
+
+              private fun processImage(image: ImageProxy) {
+                  // Получаем черно-белый канал (Y)
+                  val yBuffer = image.planes[0].buffer
+                  val yBytes = ByteArray(yBuffer.remaining())
+                  yBuffer.get(yBytes)
+                  
+                  val matGray = Mat(image.height, image.width, CvType.CV_8UC1)
+                  matGray.put(0, 0, yBytes)
+                  matGray.convertTo(matGray, CvType.CV_32F)
+
+                  // СЖАТИЕ: Уменьшаем в 4 раза для быстрого FFT (O(N log N) скажет спасибо)
+                  val smallMat = Mat()
+                  Imgproc.resize(matGray, smallMat, org.opencv.core.Size(matGray.cols() / 4.0, matGray.rows() / 4.0))
+
+                  if (anchorFrame == null) {
+                      anchorFrame = smallMat.clone()
+                      image.close()
+                      return
+                  }
+
+                  // Ищем сдвиг
+                  val shift = Imgproc.phaseCorrelate(anchorFrame, smallMat)
+                  
+                  // Умножаем обратно на 4 (т.к. сжимали)
+                  val dx = shift.x * 4.0
+                  val dy = shift.y * 4.0
+
+                  // Симуляция "Дрейфа" (возврат к центру)
+                  val smoothing = binding.seekSmoothing.progress / 100f
+                  val returnFactor = 1.0f - smoothing
+                  
+                  cumulativeShiftX = (cumulativeShiftX - dx.toFloat()) * smoothing
+                  cumulativeShiftY = (cumulativeShiftY - dy.toFloat()) * smoothing
+
+                  // Обновляем UI в главном потоке
+                  runOnUiThread {
+                      // Двигаем сам видоискатель в противофазе
+                      binding.previewView.translationX = cumulativeShiftX
+                      binding.previewView.translationY = cumulativeShiftY
+
+                      frameCount++
+                      val now = System.currentTimeMillis()
+                      if (now - lastTime >= 1000) {
+                          binding.tvFpsInfo.text = "FPS: $frameCount | Сдвиг: X:${dx.toInt()} Y:${dy.toInt()}"
+                          frameCount = 0
+                          lastTime = now
+                      }
+                  }
+
+                  // Обновляем якорь для следующего кадра (скользящее окно)
+                  anchorFrame = smallMat.clone()
+                  image.close()
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  cameraExecutor.shutdown()
+              }
+          }
+          EOF
+
+      - name: Commit UI & Code Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Fix architecture: Add CameraX, FFT downscaling, ABI filters"
+          git push || echo "No changes to commit"
+
+      - name: Build New Optimized APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EIS-Camera-Optimized
+          path: app/build/outputs/apk/debug/app-debug.apk
