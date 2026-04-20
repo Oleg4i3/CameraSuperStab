@@ -90,7 +90,7 @@ class MainActivity : AppCompatActivity() {
 
         // ХАРДКОР: Фазовая корреляция Фурье (FFT)
         // Находим сдвиг (shift.x, shift.y) и уровень корреляции (response)
-        val shift = org.opencv.core.Core.phaseCorrelate(anchorFrame, gray)
+        val shift = Imgproc.phaseCorrelate(anchorFrame, gray)
         
         if (shift.x != 0.0 || shift.y != 0.0) {
             // Тут будет код трансформации матрицы для стабилизации
