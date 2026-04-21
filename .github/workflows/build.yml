@@ -102,6 +102,7 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.CAMERA" />
               <uses-feature android:name="android.hardware.camera" android:required="true" />
+              
               <application
                   android:allowBackup="true"
                   android:label="EIS Camera Pro"
@@ -119,7 +120,6 @@ jobs:
           </manifest>
           EOF
 
-          # Новый интерфейс с кнопками и ползунками (в точности как в HTML)
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.constraintlayout.widget.ConstraintLayout 
@@ -185,7 +185,7 @@ jobs:
                           android:layout_width="80dp"
                           android:layout_height="wrap_content"
                           android:textColor="#FFFFFF"
-                          android:text="Зум: 1.5x" />
+                          android:text="Зум: 1.0x" />
 
                       <SeekBar
                           android:id="@+id/zoomSlider"
@@ -193,7 +193,7 @@ jobs:
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
                           android:max="30"
-                          android:progress="5" />
+                          android:progress="0" />
                   </LinearLayout>
 
                   <LinearLayout
@@ -221,7 +221,6 @@ jobs:
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
 
-          # Полная логика камеры, трекинга, интерфейса и записи видео
           cat << 'EOF' > app/src/main/java/com/example/eiscamera/MainActivity.java
           package com.example.eiscamera;
 
@@ -239,6 +238,7 @@ jobs:
 
           import androidx.annotation.NonNull;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.camera.core.Camera;
           import androidx.camera.core.CameraSelector;
           import androidx.camera.core.ImageAnalysis;
           import androidx.camera.core.ImageProxy;
@@ -271,28 +271,30 @@ jobs:
               private TextView zoomLabel, driftLabel;
               
               private ExecutorService cameraExecutor;
+              private Camera cameraXInstance;
 
-              // Разрешение изменено на 16:9 (широкий формат)
-              private static final int WIDTH = 854;
-              private static final int HEIGHT = 480;
-              private static final int TMPL_W = 150;
-              private static final int TMPL_H = 150;
-              private static final int IDEAL_X = (WIDTH - TMPL_W) / 2;
-              private static final int IDEAL_Y = (HEIGHT - TMPL_H) / 2;
               private static final int SEARCH_RADIUS = 60;
-              private static final int MAX_SHIFT = 40;
+              private static final int MAX_SHIFT = 60; // Максимальный сдвиг. На это значение мы обрежем края.
               private static final int EDGE_MARGIN = 20;
 
-              private double currentZoom = 1.5;
+              private double currentZoom = 1.0;
               private double currentDriftSpeed = 0.03;
 
               private Mat referenceFrame = null;
               private Mat template = null;
               
-              private double virtualX = IDEAL_X;
-              private double virtualY = IDEAL_Y;
-              private int lastMatchX = IDEAL_X;
-              private int lastMatchY = IDEAL_Y;
+              private double virtualX = 0;
+              private double virtualY = 0;
+              private int lastMatchX = 0;
+              private int lastMatchY = 0;
+              
+              // Динамические переменные для реального разрешения матрицы
+              private int actualWidth = 0;
+              private int actualHeight = 0;
+              private int tmplW = 150;
+              private int tmplH = 150;
+              private int idealX = 0;
+              private int idealY = 0;
 
               private boolean manualResetRequested = false;
               private boolean isRecording = false;
@@ -311,19 +313,29 @@ jobs:
                   zoomLabel = findViewById(R.id.zoomLabel);
                   driftLabel = findViewById(R.id.driftLabel);
 
-                  if (OpenCVLoader.initDebug()) {
-                      Toast.makeText(this, "Движок загружен", Toast.LENGTH_SHORT).show();
-                  }
+                  OpenCVLoader.initDebug();
 
                   setupUI();
 
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                       startCamera();
                   } else {
+                      // Запрос разрешения при запуске
                       ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 10);
                   }
 
                   cameraExecutor = Executors.newSingleThreadExecutor();
+              }
+
+              // Обработка ответа пользователя на запрос разрешений
+              @Override
+              public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  if (requestCode == 10 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                      startCamera();
+                  } else {
+                      Toast.makeText(this, "Приложению необходим доступ к камере!", Toast.LENGTH_LONG).show();
+                  }
               }
 
               private void setupUI() {
@@ -332,6 +344,10 @@ jobs:
                       public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                           currentZoom = 1.0 + (progress / 10.0);
                           zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
+                          // Аппаратный зум
+                          if (cameraXInstance != null) {
+                              cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
+                          }
                       }
                       @Override public void onStartTrackingTouch(SeekBar seekBar) {}
                       @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -350,27 +366,37 @@ jobs:
                   resetBtn.setOnClickListener(v -> manualResetRequested = true);
 
                   recordBtn.setOnClickListener(v -> {
+                      if (actualWidth == 0 || actualHeight == 0) {
+                          Toast.makeText(this, "Камера еще не запустилась, подождите", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
+
                       if (!isRecording) {
-                          File moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
-                          if (moviesDir != null && !moviesDir.exists()) moviesDir.mkdirs();
-                          String path = new File(moviesDir, "stabilized_" + System.currentTimeMillis() + ".avi").getAbsolutePath();
-                          
-                          videoWriter = new VideoWriter(path, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(WIDTH, HEIGHT));
-                          
-                          if (videoWriter.isOpened()) {
-                              isRecording = true;
-                              recordBtn.setText("⏹ Остановить");
-                              recordBtn.setBackgroundColor(0xFFFF0000); // Красный фон
-                              Toast.makeText(this, "Запись начата", Toast.LENGTH_SHORT).show();
-                          } else {
-                              Toast.makeText(this, "Ошибка создания видеофайла", Toast.LENGTH_LONG).show();
+                          try {
+                              File moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+                              if (moviesDir != null && !moviesDir.exists()) moviesDir.mkdirs();
+                              String path = new File(moviesDir, "stabilized_" + System.currentTimeMillis() + ".avi").getAbsolutePath();
+                              
+                              // Используем точное динамическое разрешение
+                              videoWriter = new VideoWriter(path, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
+                              
+                              if (videoWriter.isOpened()) {
+                                  isRecording = true;
+                                  recordBtn.setText("⏹ Остановить");
+                                  recordBtn.setBackgroundColor(0xFFFF0000);
+                                  Toast.makeText(this, "Запись начата!", Toast.LENGTH_SHORT).show();
+                              } else {
+                                  Toast.makeText(this, "Ошибка создания кодека видео", Toast.LENGTH_LONG).show();
+                              }
+                          } catch (Exception e) {
+                              Toast.makeText(this, "Ошибка записи: " + e.getMessage(), Toast.LENGTH_LONG).show();
                           }
                       } else {
                           isRecording = false;
                           if (videoWriter != null) videoWriter.release();
                           recordBtn.setText("🔴 Начать запись");
-                          recordBtn.setBackgroundColor(0xFF28A745); // Зеленый фон
-                          Toast.makeText(this, "Сохранено в папку Movies", Toast.LENGTH_LONG).show();
+                          recordBtn.setBackgroundColor(0xFF28A745);
+                          Toast.makeText(this, "Видео сохранено в папке Movies", Toast.LENGTH_LONG).show();
                       }
                   });
               }
@@ -381,14 +407,17 @@ jobs:
                       try {
                           ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
                           ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                                  .setTargetResolution(new Size(WIDTH, HEIGHT))
+                                  .setTargetResolution(new Size(1280, 720)) // Запрашиваем HD качество
                                   .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                   .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                                   .build();
 
                           imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
                           cameraProvider.unbindAll();
-                          cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
+                          cameraXInstance = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
+                          
+                          // Применяем стартовый аппаратный зум
+                          cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
                       } catch (Exception e) { e.printStackTrace(); }
                   }, ContextCompat.getMainExecutor(this));
               }
@@ -410,9 +439,23 @@ jobs:
                       Core.rotate(gray, gray, Core.ROTATE_180);
                   }
 
+                  // Инициализация размеров при первом кадре
+                  if (actualWidth == 0 || actualHeight == 0) {
+                      actualWidth = rgba.cols();
+                      actualHeight = rgba.rows();
+                      tmplW = actualWidth / 5;
+                      tmplH = actualHeight / 5;
+                      idealX = (actualWidth - tmplW) / 2;
+                      idealY = (actualHeight - tmplH) / 2;
+                      virtualX = idealX;
+                      virtualY = idealY;
+                      lastMatchX = idealX;
+                      lastMatchY = idealY;
+                  }
+
                   if (referenceFrame == null) {
                       referenceFrame = gray.clone();
-                      template = new Mat(referenceFrame, new Rect(IDEAL_X, IDEAL_Y, TMPL_W, TMPL_H)).clone();
+                      template = new Mat(referenceFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
                   }
 
                   if (manualResetRequested) {
@@ -422,8 +465,8 @@ jobs:
 
                   int roiX = Math.max(0, lastMatchX - SEARCH_RADIUS);
                   int roiY = Math.max(0, lastMatchY - SEARCH_RADIUS);
-                  int roiW = Math.min(rgba.cols() - roiX, TMPL_W + SEARCH_RADIUS * 2);
-                  int roiH = Math.min(rgba.rows() - roiY, TMPL_H + SEARCH_RADIUS * 2);
+                  int roiW = Math.min(rgba.cols() - roiX, tmplW + SEARCH_RADIUS * 2);
+                  int roiH = Math.min(rgba.rows() - roiY, tmplH + SEARCH_RADIUS * 2);
 
                   Mat searchRoi = new Mat(gray, new Rect(roiX, roiY, roiW, roiH));
                   Mat result = new Mat();
@@ -434,13 +477,13 @@ jobs:
                   int matchY = roiY + (int) minMax.maxLoc.y;
 
                   double jumpDist = Math.hypot(matchX - lastMatchX, matchY - lastMatchY);
-                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + TMPL_W > rgba.cols() - EDGE_MARGIN ||
-                                       matchY < EDGE_MARGIN || matchY + TMPL_H > rgba.rows() - EDGE_MARGIN;
+                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > rgba.cols() - EDGE_MARGIN ||
+                                       matchY < EDGE_MARGIN || matchY + tmplH > rgba.rows() - EDGE_MARGIN;
 
                   if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
                       triggerSmoothReset(gray);
-                      matchX = IDEAL_X;
-                      matchY = IDEAL_Y;
+                      matchX = idealX;
+                      matchY = idealY;
                   } else {
                       lastMatchX = matchX;
                       lastMatchY = matchY;
@@ -449,7 +492,7 @@ jobs:
                   virtualX += (matchX - virtualX) * currentDriftSpeed;
                   virtualY += (matchY - virtualY) * currentDriftSpeed;
 
-                  Imgproc.rectangle(rgba, new Point(matchX, matchY), new Point(matchX + TMPL_W, matchY + TMPL_H), new Scalar(255, 0, 0, 255), 3);
+                  Imgproc.rectangle(rgba, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 3);
 
                   double dx = matchX - virtualX;
                   double dy = matchY - virtualY;
@@ -457,17 +500,18 @@ jobs:
                   Mat M = new Mat(2, 3, CvType.CV_64FC1);
                   M.put(0, 0, 1, 0, -dx, 0, 1, -dy);
                   Mat stabilizedSrc = new Mat();
-                  Imgproc.warpAffine(rgba, stabilizedSrc, M, new org.opencv.core.Size(rgba.cols(), rgba.rows()), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+                  Imgproc.warpAffine(rgba, stabilizedSrc, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  double cropRatio = 1.0 / currentZoom;
-                  int cropW = (int) (rgba.cols() * cropRatio);
-                  int cropH = (int) (rgba.rows() * cropRatio);
-                  int startX = Math.max(0, (rgba.cols() - cropW) / 2);
-                  int startY = Math.max(0, (rgba.rows() - cropH) / 2);
+                  // Невидимый фиксированный кроп, чтобы скрыть черные полосы от стабилизации (на размер MAX_SHIFT)
+                  int cropW = actualWidth - (MAX_SHIFT * 2);
+                  int cropH = actualHeight - (MAX_SHIFT * 2);
+                  int startX = MAX_SHIFT;
+                  int startY = MAX_SHIFT;
 
                   Mat outputCropped = new Mat(stabilizedSrc, new Rect(startX, startY, cropW, cropH));
                   Mat outputResized = new Mat();
-                  Imgproc.resize(outputCropped, outputResized, new org.opencv.core.Size(rgba.cols(), rgba.rows()), 0, 0, Imgproc.INTER_LINEAR);
+                  // Растягиваем обратно до начального размера кадра
+                  Imgproc.resize(outputCropped, outputResized, new org.opencv.core.Size(actualWidth, actualHeight), 0, 0, Imgproc.INTER_LINEAR);
 
                   // Запись видео
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
@@ -491,11 +535,11 @@ jobs:
                   double currentDx = lastMatchX - virtualX;
                   double currentDy = lastMatchY - virtualY;
                   template.release();
-                  template = new Mat(grayFrame, new Rect(IDEAL_X, IDEAL_Y, TMPL_W, TMPL_H)).clone();
-                  virtualX = IDEAL_X - currentDx;
-                  virtualY = IDEAL_Y - currentDy;
-                  lastMatchX = IDEAL_X;
-                  lastMatchY = IDEAL_Y;
+                  template = new Mat(grayFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
+                  virtualX = idealX - currentDx;
+                  virtualY = idealY - currentDy;
+                  lastMatchX = idealX;
+                  lastMatchY = idealY;
               }
 
               private Mat imageProxyToMat(ImageProxy image) {
