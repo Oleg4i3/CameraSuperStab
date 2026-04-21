@@ -27,7 +27,6 @@ jobs:
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/res/mipmap
           
-          # Настройки проекта
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories {
@@ -47,20 +46,17 @@ jobs:
           include ':app'
           EOF
 
-          # Корневой build.gradle
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.0' apply false
           }
           EOF
 
-          # gradle.properties
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           EOF
 
-          # build.gradle приложения (ДОБАВЛЕНО РЕШЕНИЕ ПРОБЛЕМЫ DUPLICATE CLASS)
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -86,12 +82,10 @@ jobs:
               }
           }
           dependencies {
-              // Принудительно выравниваем версии Kotlin, чтобы избежать Duplicate Class
               constraints {
                   implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22")
                   implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22")
               }
-              
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
               implementation "androidx.camera:camera-core:1.3.0"
@@ -99,13 +93,10 @@ jobs:
               implementation "androidx.camera:camera-lifecycle:1.3.0"
               implementation "androidx.camera:camera-view:1.3.0"
               implementation "com.google.guava:guava:31.1-android"
-              
-              // Готовая сборка OpenCV
               implementation 'com.quickbirdstudios:opencv:4.5.3.0'
           }
           EOF
 
-          # AndroidManifest.xml
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -113,12 +104,12 @@ jobs:
               <uses-feature android:name="android.hardware.camera" android:required="true" />
               <application
                   android:allowBackup="true"
-                  android:label="EIS Camera"
+                  android:label="EIS Camera Pro"
                   android:theme="@style/Theme.AppCompat.NoActionBar">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:screenOrientation="portrait">
+                      android:screenOrientation="landscape">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -128,7 +119,7 @@ jobs:
           </manifest>
           EOF
 
-          # activity_main.xml
+          # Новый интерфейс с кнопками и ползунками (в точности как в HTML)
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.constraintlayout.widget.ConstraintLayout 
@@ -137,6 +128,7 @@ jobs:
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:background="#000000">
+
               <ImageView
                   android:id="@+id/imageView"
                   android:layout_width="0dp"
@@ -146,10 +138,90 @@ jobs:
                   app:layout_constraintEnd_toEndOf="parent"
                   app:layout_constraintStart_toStartOf="parent"
                   app:layout_constraintTop_toTopOf="parent" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="#88000000"
+                  android:padding="16dp"
+                  app:layout_constraintBottom_toBottomOf="parent">
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:layout_marginBottom="12dp">
+
+                      <Button
+                          android:id="@+id/resetBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="Сброс фокуса"
+                          android:backgroundTint="#dc3545"
+                          android:textColor="#FFFFFF"
+                          android:layout_marginEnd="8dp"/>
+
+                      <Button
+                          android:id="@+id/recordBtn"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="🔴 Начать запись"
+                          android:backgroundTint="#28a745"
+                          android:textColor="#FFFFFF"
+                          android:layout_marginStart="8dp"/>
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+
+                      <TextView
+                          android:id="@+id/zoomLabel"
+                          android:layout_width="80dp"
+                          android:layout_height="wrap_content"
+                          android:textColor="#FFFFFF"
+                          android:text="Зум: 1.5x" />
+
+                      <SeekBar
+                          android:id="@+id/zoomSlider"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="30"
+                          android:progress="5" />
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+
+                      <TextView
+                          android:id="@+id/driftLabel"
+                          android:layout_width="80dp"
+                          android:layout_height="wrap_content"
+                          android:textColor="#FFFFFF"
+                          android:text="Дрейф: 0.03" />
+
+                      <SeekBar
+                          android:id="@+id/driftSlider"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="100"
+                          android:progress="30" />
+                  </LinearLayout>
+              </LinearLayout>
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
 
-          # MainActivity.java
+          # Полная логика камеры, трекинга, интерфейса и записи видео
           cat << 'EOF' > app/src/main/java/com/example/eiscamera/MainActivity.java
           package com.example.eiscamera;
 
@@ -157,8 +229,12 @@ jobs:
           import android.content.pm.PackageManager;
           import android.graphics.Bitmap;
           import android.os.Bundle;
+          import android.os.Environment;
           import android.util.Size;
+          import android.widget.Button;
           import android.widget.ImageView;
+          import android.widget.SeekBar;
+          import android.widget.TextView;
           import android.widget.Toast;
 
           import androidx.annotation.NonNull;
@@ -181,16 +257,23 @@ jobs:
           import org.opencv.core.Rect;
           import org.opencv.core.Scalar;
           import org.opencv.imgproc.Imgproc;
+          import org.opencv.videoio.VideoWriter;
 
+          import java.io.File;
           import java.nio.ByteBuffer;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
 
           public class MainActivity extends AppCompatActivity {
               private ImageView imageView;
+              private Button resetBtn, recordBtn;
+              private SeekBar zoomSlider, driftSlider;
+              private TextView zoomLabel, driftLabel;
+              
               private ExecutorService cameraExecutor;
 
-              private static final int WIDTH = 640;
+              // Разрешение изменено на 16:9 (широкий формат)
+              private static final int WIDTH = 854;
               private static final int HEIGHT = 480;
               private static final int TMPL_W = 150;
               private static final int TMPL_H = 150;
@@ -211,15 +294,28 @@ jobs:
               private int lastMatchX = IDEAL_X;
               private int lastMatchY = IDEAL_Y;
 
+              private boolean manualResetRequested = false;
+              private boolean isRecording = false;
+              private VideoWriter videoWriter = null;
+
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
+                  
                   imageView = findViewById(R.id.imageView);
+                  resetBtn = findViewById(R.id.resetBtn);
+                  recordBtn = findViewById(R.id.recordBtn);
+                  zoomSlider = findViewById(R.id.zoomSlider);
+                  driftSlider = findViewById(R.id.driftSlider);
+                  zoomLabel = findViewById(R.id.zoomLabel);
+                  driftLabel = findViewById(R.id.driftLabel);
 
                   if (OpenCVLoader.initDebug()) {
-                      Toast.makeText(this, "OpenCV Loaded", Toast.LENGTH_SHORT).show();
+                      Toast.makeText(this, "Движок загружен", Toast.LENGTH_SHORT).show();
                   }
+
+                  setupUI();
 
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                       startCamera();
@@ -228,6 +324,55 @@ jobs:
                   }
 
                   cameraExecutor = Executors.newSingleThreadExecutor();
+              }
+
+              private void setupUI() {
+                  zoomSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override
+                      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                          currentZoom = 1.0 + (progress / 10.0);
+                          zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
+                      }
+                      @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                      @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                  });
+
+                  driftSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override
+                      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                          currentDriftSpeed = progress / 1000.0;
+                          driftLabel.setText(String.format("Дрейф: %.3f", currentDriftSpeed));
+                      }
+                      @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                      @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                  });
+
+                  resetBtn.setOnClickListener(v -> manualResetRequested = true);
+
+                  recordBtn.setOnClickListener(v -> {
+                      if (!isRecording) {
+                          File moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+                          if (moviesDir != null && !moviesDir.exists()) moviesDir.mkdirs();
+                          String path = new File(moviesDir, "stabilized_" + System.currentTimeMillis() + ".avi").getAbsolutePath();
+                          
+                          videoWriter = new VideoWriter(path, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(WIDTH, HEIGHT));
+                          
+                          if (videoWriter.isOpened()) {
+                              isRecording = true;
+                              recordBtn.setText("⏹ Остановить");
+                              recordBtn.setBackgroundColor(0xFFFF0000); // Красный фон
+                              Toast.makeText(this, "Запись начата", Toast.LENGTH_SHORT).show();
+                          } else {
+                              Toast.makeText(this, "Ошибка создания видеофайла", Toast.LENGTH_LONG).show();
+                          }
+                      } else {
+                          isRecording = false;
+                          if (videoWriter != null) videoWriter.release();
+                          recordBtn.setText("🔴 Начать запись");
+                          recordBtn.setBackgroundColor(0xFF28A745); // Зеленый фон
+                          Toast.makeText(this, "Сохранено в папку Movies", Toast.LENGTH_LONG).show();
+                      }
+                  });
               }
 
               private void startCamera() {
@@ -268,6 +413,11 @@ jobs:
                   if (referenceFrame == null) {
                       referenceFrame = gray.clone();
                       template = new Mat(referenceFrame, new Rect(IDEAL_X, IDEAL_Y, TMPL_W, TMPL_H)).clone();
+                  }
+
+                  if (manualResetRequested) {
+                      triggerSmoothReset(gray);
+                      manualResetRequested = false;
                   }
 
                   int roiX = Math.max(0, lastMatchX - SEARCH_RADIUS);
@@ -319,6 +469,14 @@ jobs:
                   Mat outputResized = new Mat();
                   Imgproc.resize(outputCropped, outputResized, new org.opencv.core.Size(rgba.cols(), rgba.rows()), 0, 0, Imgproc.INTER_LINEAR);
 
+                  // Запись видео
+                  if (isRecording && videoWriter != null && videoWriter.isOpened()) {
+                      Mat bgr = new Mat();
+                      Imgproc.cvtColor(outputResized, bgr, Imgproc.COLOR_RGBA2BGR);
+                      videoWriter.write(bgr);
+                      bgr.release();
+                  }
+
                   Bitmap bitmap = Bitmap.createBitmap(outputResized.cols(), outputResized.rows(), Bitmap.Config.ARGB_8888);
                   Utils.matToBitmap(outputResized, bitmap);
                   runOnUiThread(() -> imageView.setImageBitmap(bitmap));
@@ -347,6 +505,14 @@ jobs:
                   Mat rgbaMat = new Mat(image.getHeight(), image.getWidth(), CvType.CV_8UC4);
                   rgbaMat.put(0, 0, data);
                   return rgbaMat;
+              }
+              
+              @Override
+              protected void onDestroy() {
+                  super.onDestroy();
+                  if (isRecording && videoWriter != null) {
+                      videoWriter.release();
+                  }
               }
           }
           EOF
