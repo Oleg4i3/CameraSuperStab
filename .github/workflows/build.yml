@@ -279,10 +279,12 @@ jobs:
               private ExecutorService cameraExecutor;
               private Camera cameraXInstance;
 
-              // Оригинальные параметры из веб-версии
               private static final int SEARCH_RADIUS = 60;
-              private static final int MAX_SHIFT = 40; // Вернул жесткий допуск 40
+              private static final int MAX_SHIFT = 40;
               private static final int EDGE_MARGIN = 20;
+              
+              // Базовый кроп, обеспечивающий "буфер" для идеальной плавности перетекания
+              private static final double EIS_DIGITAL_ZOOM = 1.2; 
 
               private double currentZoom = 1.0;
               private double currentDriftSpeed = 0.03;
@@ -295,6 +297,9 @@ jobs:
               private int lastMatchX = 0;
               private int lastMatchY = 0;
               
+              private Integer ghostOffsetX = null;
+              private Integer ghostOffsetY = null;
+              
               private int actualWidth = 0;
               private int actualHeight = 0;
               private int tmplW = 150;
@@ -306,6 +311,9 @@ jobs:
               private boolean isRecording = false;
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
+              
+              // Оптимизация памяти, чтобы предотвратить микро-фризы сборщика мусора
+              private Bitmap displayBitmap = null;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -332,23 +340,12 @@ jobs:
                   cameraExecutor = Executors.newSingleThreadExecutor();
               }
 
-              @Override
-              public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-                  if (requestCode == 10 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                      startCamera();
-                  } else {
-                      Toast.makeText(this, "Приложению необходим доступ к камере!", Toast.LENGTH_LONG).show();
-                  }
-              }
-
               private void setupUI() {
                   zoomSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                       @Override
                       public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                           currentZoom = 1.0 + (progress / 10.0);
                           zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
-                          // Применяем ТОЛЬКО аппаратный (нативный) зум камеры
                           if (cameraXInstance != null) {
                               cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
                           }
@@ -374,15 +371,13 @@ jobs:
 
                       if (!isRecording) {
                           try {
-                              // Пишем во временный скрытый кэш
                               File cacheDir = getExternalCacheDir();
                               if (cacheDir == null) cacheDir = getCacheDir();
                               File tempFile = new File(cacheDir, "temp_video.avi");
                               tempVideoPath = tempFile.getAbsolutePath();
                               
-                              // Учитываем обрезку (MAX_SHIFT) при создании файла видео
-                              int outW = actualWidth - (MAX_SHIFT * 2);
-                              int outH = actualHeight - (MAX_SHIFT * 2);
+                              int outW = actualWidth;
+                              int outH = actualHeight;
                               
                               videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(outW, outH));
                               
@@ -402,7 +397,6 @@ jobs:
                           recordBtn.setText("⏳ Сохранение...");
                           recordBtn.setEnabled(false);
                           
-                          // Останавливаем запись и копируем в Галерею в фоне
                           cameraExecutor.execute(() -> {
                               if (videoWriter != null) {
                                   videoWriter.release();
@@ -419,8 +413,7 @@ jobs:
                       }
                   });
               }
-              
-              // Экспорт видео из кэша в общую Галерею (через MediaStore)
+
               private void saveVideoToGallery(String path) {
                   File file = new File(path);
                   if (!file.exists()) return;
@@ -439,15 +432,12 @@ jobs:
                           while ((read = is.read(buffer)) != -1) {
                               os.write(buffer, 0, read);
                           }
-                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео в Галерее (папка Movies/EIS_Camera)!", Toast.LENGTH_LONG).show());
+                          runOnUiThread(() -> Toast.makeText(this, "✅ Сохранено в Галерею!", Toast.LENGTH_LONG).show());
                       } catch (Exception e) {
                           e.printStackTrace();
-                          runOnUiThread(() -> Toast.makeText(this, "Ошибка сохранения: " + e.getMessage(), Toast.LENGTH_LONG).show());
                       }
-                  } else {
-                      runOnUiThread(() -> Toast.makeText(this, "Ошибка доступа к Медиахранилищу", Toast.LENGTH_SHORT).show());
                   }
-                  file.delete(); // Удаляем временный файл
+                  file.delete(); 
               }
 
               private void startCamera() {
@@ -526,7 +516,6 @@ jobs:
                   boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > rgba.cols() - EDGE_MARGIN ||
                                        matchY < EDGE_MARGIN || matchY + tmplH > rgba.rows() - EDGE_MARGIN;
 
-                  // Жесткая проверка на хаотичный скачок как в HTML
                   if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
                       triggerSmoothReset(gray);
                       matchX = idealX;
@@ -539,51 +528,86 @@ jobs:
                   virtualX += (matchX - virtualX) * currentDriftSpeed;
                   virtualY += (matchY - virtualY) * currentDriftSpeed;
 
-                  Imgproc.rectangle(rgba, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 3);
-
                   double dx = matchX - virtualX;
                   double dy = matchY - virtualY;
-
                   Mat M = new Mat(2, 3, CvType.CV_64FC1);
                   M.put(0, 0, 1, 0, -dx, 0, 1, -dy);
-                  Mat stabilizedSrc = new Mat();
-                  Imgproc.warpAffine(rgba, stabilizedSrc, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  // Вырезаем только мертвые черные зоны (никакого цифрового "мыльного" зума)
-                  int cropW = actualWidth - (MAX_SHIFT * 2);
-                  int cropH = actualHeight - (MAX_SHIFT * 2);
-                  int startX = MAX_SHIFT;
-                  int startY = MAX_SHIFT;
+                  // 1. Создаем отдельный слой для UI (Рисуем рамки)
+                  Mat rgbaUI = rgba.clone();
+                  
+                  if (ghostOffsetX != null && ghostOffsetY != null) {
+                      int gx = matchX + ghostOffsetX;
+                      int gy = matchY + ghostOffsetY;
+                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 2);
+                  }
+                  
+                  Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 3);
 
-                  Mat outputCropped = new Mat(stabilizedSrc, new Rect(startX, startY, cropW, cropH));
-                  Mat outputResized = new Mat();
-                  Imgproc.resize(outputCropped, outputResized, new org.opencv.core.Size(actualWidth, actualHeight), 0, 0, Imgproc.INTER_LINEAR);
+                  // 2. Стабилизируем оба кадра (чистый и с UI)
+                  Mat stabilizedClean = new Mat();
+                  Imgproc.warpAffine(rgba, stabilizedClean, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
+                  Mat stabilizedUI = new Mat();
+                  Imgproc.warpAffine(rgbaUI, stabilizedUI, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+
+                  // 3. Выполняем базовый EIS-кроп для плавной стабилизации
+                  int cropW = (int) (actualWidth / EIS_DIGITAL_ZOOM);
+                  int cropH = (int) (actualHeight / EIS_DIGITAL_ZOOM);
+                  int startX = (actualWidth - cropW) / 2;
+                  int startY = (actualHeight - cropH) / 2;
+                  Rect cropRect = new Rect(startX, startY, cropW, cropH);
+                  org.opencv.core.Size outSize = new org.opencv.core.Size(actualWidth, actualHeight);
+
+                  Mat outputCroppedClean = new Mat(stabilizedClean, cropRect);
+                  Mat outputResizedClean = new Mat();
+                  Imgproc.resize(outputCroppedClean, outputResizedClean, outSize, 0, 0, Imgproc.INTER_LINEAR);
+
+                  Mat outputCroppedUI = new Mat(stabilizedUI, cropRect);
+                  Mat outputResizedUI = new Mat();
+                  Imgproc.resize(outputCroppedUI, outputResizedUI, outSize, 0, 0, Imgproc.INTER_LINEAR);
+
+                  // 4. Пишем чистое видео без рамок!
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
                       Mat bgr = new Mat();
-                      // Для записи отдаем кадр реального обрезанного размера, чтобы кодек не ругался
-                      Imgproc.cvtColor(outputCropped, bgr, Imgproc.COLOR_RGBA2BGR);
+                      Imgproc.cvtColor(outputResizedClean, bgr, Imgproc.COLOR_RGBA2BGR);
                       videoWriter.write(bgr);
                       bgr.release();
                   }
 
-                  Bitmap bitmap = Bitmap.createBitmap(outputResized.cols(), outputResized.rows(), Bitmap.Config.ARGB_8888);
-                  Utils.matToBitmap(outputResized, bitmap);
-                  runOnUiThread(() -> imageView.setImageBitmap(bitmap));
+                  // 5. Выводим кадр с UI на экран пользователя
+                  if (displayBitmap == null || displayBitmap.getWidth() != actualWidth || displayBitmap.getHeight() != actualHeight) {
+                      displayBitmap = Bitmap.createBitmap(actualWidth, actualHeight, Bitmap.Config.ARGB_8888);
+                  }
+                  Utils.matToBitmap(outputResizedUI, displayBitmap);
+                  runOnUiThread(() -> imageView.setImageBitmap(displayBitmap));
 
+                  // 6. Очистка памяти для предотвращения OOM и фризов GC
                   rgba.release(); gray.release(); searchRoi.release(); result.release();
-                  M.release(); stabilizedSrc.release(); outputCropped.release(); outputResized.release();
+                  M.release(); rgbaUI.release(); 
+                  stabilizedClean.release(); stabilizedUI.release();
+                  outputCroppedClean.release(); outputResizedClean.release();
+                  outputCroppedUI.release(); outputResizedUI.release();
                   image.close();
               }
 
               private void triggerSmoothReset(Mat grayFrame) {
                   if (template == null) return;
+                  
+                  // Сохраняем "Призрака" старого таргета
+                  ghostOffsetX = lastMatchX - idealX;
+                  ghostOffsetY = lastMatchY - idealY;
+                  
                   double currentDx = lastMatchX - virtualX;
                   double currentDy = lastMatchY - virtualY;
+                  
                   template.release();
                   template = new Mat(grayFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
+                  
+                  // Точное сохранение оффсета для бесшовного "перетекания"
                   virtualX = idealX - currentDx;
                   virtualY = idealY - currentDy;
+                  
                   lastMatchX = idealX;
                   lastMatchY = idealY;
               }
