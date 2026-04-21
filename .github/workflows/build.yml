@@ -82,10 +82,6 @@ jobs:
               }
           }
           dependencies {
-              constraints {
-                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22")
-                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22")
-              }
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
               implementation "androidx.camera:camera-core:1.3.0"
@@ -94,8 +90,16 @@ jobs:
               implementation "androidx.camera:camera-view:1.3.0"
               implementation "com.google.guava:guava:31.1-android"
               implementation 'com.quickbirdstudios:opencv:4.5.3.0'
-              // FFMPEG УДАЛЕН. ВОЗВРАЩАЕМСЯ К СТАБИЛЬНОЙ СБОРКЕ
+              implementation 'com.arthenica:mobile-ffmpeg-full:4.4'
           }
+          EOF
+
+          # Файл ресурсов с цветами для исправления ошибки AAPT2
+          cat << 'EOF' > app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="black">#000000</color>
+          </resources>
           EOF
 
           cat << 'EOF' > app/src/main/res/drawable/ic_camera_logo.xml
@@ -106,10 +110,11 @@ jobs:
           </vector>
           EOF
 
+          # Исправленная адаптивная иконка (используем @color/black вместо #000000)
           cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           <?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="#000000" />
+              <background android:drawable="@color/black" />
               <foreground android:drawable="@drawable/ic_camera_logo" />
           </adaptive-icon>
           EOF
@@ -118,7 +123,9 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-feature android:name="android.hardware.camera" android:required="true" />
+              <uses-feature android:name="android.hardware.microphone" android:required="true" />
               
               <application
                   android:allowBackup="true"
@@ -200,6 +207,9 @@ jobs:
 
                   <TextView android:id="@+id/driftLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFF" android:text="Дрейф: 0.03" />
                   <SeekBar android:id="@+id/driftSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="30" android:layout_marginBottom="8dp"/>
+
+                  <TextView android:id="@+id/gainLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFF" android:text="Gain: 0 dB" />
+                  <SeekBar android:id="@+id/gainSlider" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="20" android:progress="0" />
               </LinearLayout>
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
@@ -212,6 +222,9 @@ jobs:
           import android.content.pm.PackageManager;
           import android.graphics.Bitmap;
           import android.hardware.camera2.CaptureRequest;
+          import android.media.AudioFormat;
+          import android.media.AudioRecord;
+          import android.media.MediaRecorder;
           import android.net.Uri;
           import android.os.Bundle;
           import android.os.Environment;
@@ -238,6 +251,7 @@ jobs:
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
 
+          import com.arthenica.mobileffmpeg.FFmpeg;
           import com.google.common.util.concurrent.ListenableFuture;
 
           import org.opencv.android.OpenCVLoader;
@@ -253,6 +267,7 @@ jobs:
 
           import java.io.File;
           import java.io.FileInputStream;
+          import java.io.FileOutputStream;
           import java.io.InputStream;
           import java.io.OutputStream;
           import java.nio.ByteBuffer;
@@ -262,8 +277,8 @@ jobs:
           public class MainActivity extends AppCompatActivity {
               private ImageView imageView;
               private Button resetBtn, recordBtn, focusBtn;
-              private SeekBar zoomSlider, driftSlider;
-              private TextView zoomLabel, driftLabel;
+              private SeekBar zoomSlider, driftSlider, gainSlider;
+              private TextView zoomLabel, driftLabel, gainLabel;
               
               private ExecutorService cameraExecutor;
               private CameraControl cameraControl;
@@ -275,6 +290,7 @@ jobs:
 
               private double currentZoom = 1.5;
               private double currentDriftSpeed = 0.03;
+              private double audioGainDb = 0.0;
 
               private Mat referenceFrame = null;
               private Mat template = null;
@@ -289,12 +305,15 @@ jobs:
 
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
+              private String tempAudioPath = null;
               private Bitmap displayBitmap = null;
+              
+              private AudioRecord audioRecord;
+              private Thread audioThread;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-                  // ЭКРАН ВСЕГДА ВКЛЮЧЕН
                   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                   setContentView(R.layout.activity_main);
                   
@@ -304,16 +323,20 @@ jobs:
                   focusBtn = findViewById(R.id.focusBtn);
                   zoomSlider = findViewById(R.id.zoomSlider);
                   driftSlider = findViewById(R.id.driftSlider);
+                  gainSlider = findViewById(R.id.gainSlider);
                   zoomLabel = findViewById(R.id.zoomLabel);
                   driftLabel = findViewById(R.id.driftLabel);
+                  gainLabel = findViewById(R.id.gainLabel);
 
                   OpenCVLoader.initDebug();
                   setupUI();
 
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                  String[] perms = {Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+                      ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                       startCamera();
                   } else {
-                      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 10);
+                      ActivityCompat.requestPermissions(this, perms, 10);
                   }
 
                   cameraExecutor = Executors.newSingleThreadExecutor();
@@ -327,6 +350,11 @@ jobs:
 
                   driftSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                       @Override public void onProgressChanged(SeekBar seekBar, int p, boolean b) { currentDriftSpeed = p / 1000.0; driftLabel.setText(String.format("Дрейф: %.3f", currentDriftSpeed)); }
+                      @Override public void onStartTrackingTouch(SeekBar s) {} @Override public void onStopTrackingTouch(SeekBar s) {}
+                  });
+
+                  gainSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override public void onProgressChanged(SeekBar seekBar, int p, boolean b) { audioGainDb = p; gainLabel.setText(String.format("Gain: +%d dB", p)); }
                       @Override public void onStartTrackingTouch(SeekBar s) {} @Override public void onStopTrackingTouch(SeekBar s) {}
                   });
 
@@ -352,70 +380,116 @@ jobs:
                       if (actualWidth == 0 || actualHeight == 0) return;
 
                       if (!isRecording) {
-                          try {
-                              File cacheDir = getExternalCacheDir();
-                              if (cacheDir == null) cacheDir = getCacheDir();
-                              tempVideoPath = new File(cacheDir, "temp_video.avi").getAbsolutePath();
-                              
-                              videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
-                              
-                              if (videoWriter.isOpened()) {
-                                  isRecording = true;
-                                  recordBtn.setText("⏹ СТОП");
-                                  recordBtn.setBackgroundColor(0xFFFF0000);
-                                  Toast.makeText(this, "Запись начата!", Toast.LENGTH_SHORT).show();
-                              } else {
-                                  Toast.makeText(this, "Ошибка запуска кодека", Toast.LENGTH_LONG).show();
-                              }
-                          } catch (Exception e) {
-                              Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                          }
+                          startRecording();
                       } else {
-                          isRecording = false;
-                          recordBtn.setText("⏳ Сохранение...");
-                          recordBtn.setEnabled(false);
-                          
-                          cameraExecutor.execute(() -> {
-                              if (videoWriter != null) {
-                                  videoWriter.release();
-                                  videoWriter = null;
-                              }
-                              saveVideoToGallery(tempVideoPath);
-                              
-                              runOnUiThread(() -> {
-                                  recordBtn.setEnabled(true);
-                                  recordBtn.setText("🔴 REC");
-                                  recordBtn.setBackgroundColor(0xFF28A745);
-                              });
-                          });
+                          stopRecording();
                       }
+                  });
+              }
+
+              private void startRecording() {
+                  try {
+                      File cacheDir = getExternalCacheDir();
+                      tempVideoPath = new File(cacheDir, "temp_video.avi").getAbsolutePath();
+                      tempAudioPath = new File(cacheDir, "temp_audio.pcm").getAbsolutePath();
+                      
+                      videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
+                      
+                      if (videoWriter.isOpened()) {
+                          isRecording = true;
+                          recordBtn.setText("⏹ СТОП");
+                          recordBtn.setBackgroundColor(0xFFFF0000);
+                          startAudioRecording();
+                          Toast.makeText(this, "Запись...", Toast.LENGTH_SHORT).show();
+                      }
+                  } catch (Exception e) {
+                      e.printStackTrace();
+                  }
+              }
+
+              private void startAudioRecording() {
+                  int sampleRate = 44100;
+                  int bufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                  
+                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
+                  
+                  audioRecord = new AudioRecord(MediaRecorder.AudioSource.UNPROCESSED, sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2);
+                  
+                  audioThread = new Thread(() -> {
+                      audioRecord.startRecording();
+                      try (FileOutputStream os = new FileOutputStream(tempAudioPath)) {
+                          short[] buffer = new short[bufferSize];
+                          while (isRecording) {
+                              int read = audioRecord.read(buffer, 0, buffer.length);
+                              if (read > 0) {
+                                  double gainFactor = Math.pow(10.0, audioGainDb / 20.0);
+                                  for (int i = 0; i < read; i++) {
+                                      double x = (buffer[i] / 32768.0) * gainFactor;
+                                      double clipped = x / (1.0 + Math.abs(x));
+                                      buffer[i] = (short) (clipped * 32767.0);
+                                  }
+                                  
+                                  ByteBuffer byteBuffer = ByteBuffer.allocate(read * 2);
+                                  for (int i = 0; i < read; i++) byteBuffer.putShort(buffer[i]);
+                                  os.write(byteBuffer.array());
+                              }
+                          }
+                      } catch (Exception e) { e.printStackTrace(); }
+                  });
+                  audioThread.start();
+              }
+
+              private void stopRecording() {
+                  isRecording = false;
+                  recordBtn.setText("⏳ Обработка...");
+                  recordBtn.setEnabled(false);
+                  
+                  if (audioRecord != null) {
+                      audioRecord.stop();
+                      audioRecord.release();
+                      audioRecord = null;
+                  }
+
+                  cameraExecutor.execute(() -> {
+                      if (videoWriter != null) {
+                          videoWriter.release();
+                          videoWriter = null;
+                      }
+                      
+                      String finalMp4Path = new File(getExternalCacheDir(), "final_" + System.currentTimeMillis() + ".mp4").getAbsolutePath();
+                      String command = String.format("-y -i %s -f s16le -ar 44100 -ac 1 -i %s -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k %s", tempVideoPath, tempAudioPath, finalMp4Path);
+                      
+                      FFmpeg.execute(command);
+                      saveVideoToGallery(finalMp4Path);
+                      
+                      runOnUiThread(() -> {
+                          recordBtn.setEnabled(true);
+                          recordBtn.setText("🔴 REC");
+                          recordBtn.setBackgroundColor(0xFF28A745);
+                      });
                   });
               }
 
               private void saveVideoToGallery(String path) {
                   File file = new File(path);
                   if (!file.exists()) return;
-
                   ContentValues values = new ContentValues();
-                  values.put(MediaStore.Video.Media.DISPLAY_NAME, "EIS_" + System.currentTimeMillis() + ".avi");
-                  values.put(MediaStore.Video.Media.MIME_TYPE, "video/avi");
+                  values.put(MediaStore.Video.Media.DISPLAY_NAME, "EIS_" + System.currentTimeMillis() + ".mp4");
+                  values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
                   values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EIS_Camera");
-
                   Uri uri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
                   if (uri != null) {
                       try (OutputStream os = getContentResolver().openOutputStream(uri);
                            InputStream is = new FileInputStream(file)) {
                           byte[] buffer = new byte[8192];
                           int read;
-                          while ((read = is.read(buffer)) != -1) {
-                              os.write(buffer, 0, read);
-                          }
-                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео сохранено в Галерею!", Toast.LENGTH_LONG).show());
-                      } catch (Exception e) {
-                          e.printStackTrace();
-                      }
+                          while ((read = is.read(buffer)) != -1) os.write(buffer, 0, read);
+                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео со звуком (MP4) сохранено!", Toast.LENGTH_LONG).show());
+                      } catch (Exception e) { e.printStackTrace(); }
                   }
                   file.delete(); 
+                  new File(tempVideoPath).delete();
+                  new File(tempAudioPath).delete();
               }
 
               private void startCamera() {
