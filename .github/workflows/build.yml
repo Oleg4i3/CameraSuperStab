@@ -3,7 +3,7 @@ name: Auto-Build Android APK
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # Позволяет запускать сборку кнопкой вручную
+  workflow_dispatch:
 
 jobs:
   build:
@@ -22,13 +22,11 @@ jobs:
 
       - name: Create Android Project Structure and Write Code
         run: |
-          # Создаем все нужные папки одним махом
           mkdir -p app/src/main/java/com/example/eiscamera
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/res/mipmap
           
-          # 1. Пишем settings.gradle
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories {
@@ -49,7 +47,6 @@ jobs:
           include ':opencv'
           EOF
 
-          # 2. Пишем корневой build.gradle
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.0' apply false
@@ -57,13 +54,11 @@ jobs:
           }
           EOF
 
-          # 3. Пишем gradle.properties
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           EOF
 
-          # 4. Пишем app/build.gradle
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -100,7 +95,6 @@ jobs:
           }
           EOF
 
-          # 5. Пишем AndroidManifest.xml
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -123,7 +117,6 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Пишем layout (интерфейс)
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.constraintlayout.widget.ConstraintLayout 
@@ -144,7 +137,6 @@ jobs:
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
 
-          # 7. Пишем MainActivity.java (полный код камеры и стабилизации)
           cat << 'EOF' > app/src/main/java/com/example/eiscamera/MainActivity.java
           package com.example.eiscamera;
 
@@ -362,10 +354,13 @@ jobs:
           wget -q https://github.com/opencv/opencv/releases/download/4.8.0/opencv-4.8.0-android-sdk.zip
           unzip -q opencv-4.8.0-android-sdk.zip
           mv OpenCV-android-sdk/sdk opencv
-          # Фикс для совместимости старого файла OpenCV с новыми сборщиками:
+          
+          # Убираем старый kotlin плагин, который вызывает конфликты
           sed -i 's/apply plugin: '\''kotlin-android'\''//g' opencv/build.gradle
-          sed -i 's/namespace '\''org.opencv'\''//g' opencv/build.gradle
-          sed -i '1 i\android { namespace "org.opencv" }' opencv/build.gradle
+          
+          # ДОБАВЛЯЕМ namespace в самый конец файла (ПРАВИЛЬНЫЙ ВАРИАНТ)
+          echo "" >> opencv/build.gradle
+          echo "android { namespace 'org.opencv' }" >> opencv/build.gradle
 
       - name: Setup Gradle Wrapper
         run: gradle wrapper --gradle-version 8.4
