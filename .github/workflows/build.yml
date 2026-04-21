@@ -71,7 +71,6 @@ jobs:
                   versionCode 1
                   versionName "1.0"
                   
-                  // Оставляем только нужную архитектуру процессора. Снижает вес APK с 200 МБ до 35 МБ!
                   ndk {
                       abiFilters 'arm64-v8a'
                   }
@@ -233,6 +232,7 @@ jobs:
           import android.content.ContentValues;
           import android.content.pm.PackageManager;
           import android.graphics.Bitmap;
+          import android.hardware.camera2.CaptureRequest;
           import android.net.Uri;
           import android.os.Bundle;
           import android.os.Environment;
@@ -246,6 +246,7 @@ jobs:
 
           import androidx.annotation.NonNull;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.camera.camera2.interop.Camera2Interop;
           import androidx.camera.core.Camera;
           import androidx.camera.core.CameraSelector;
           import androidx.camera.core.ImageAnalysis;
@@ -283,13 +284,11 @@ jobs:
               
               private ExecutorService cameraExecutor;
 
-              // Оригинальные параметры из веб-версии
-              private static final int TRACK_WIDTH = 640; // Сжимаем до 640p для агрессивного трекинга
-              private static final int SEARCH_RADIUS = 80;
-              private static final int MAX_SHIFT = 60; // Максимально допустимый скачок
-              private static final int EDGE_MARGIN = 20;
+              // Адаптированные под HD (720p) параметры
+              private static final int SEARCH_RADIUS = 120;
+              private static final int MAX_SHIFT = 100; // Мертвая хватка (разрешаем сильный сдвиг)
+              private static final int EDGE_MARGIN = 40;
 
-              // Вернули ЦИФРОВОЙ зум, он же "буфер стабилизации"
               private double currentZoom = 1.5;
               private double currentDriftSpeed = 0.03;
 
@@ -306,10 +305,8 @@ jobs:
               
               private int actualWidth = 0;
               private int actualHeight = 0;
-              private int trackHeight = 0;
-              
-              private int tmplW = 150;
-              private int tmplH = 150;
+              private int tmplW = 0;
+              private int tmplH = 0;
               private int idealX = 0;
               private int idealY = 0;
 
@@ -318,6 +315,8 @@ jobs:
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
               private Bitmap displayBitmap = null;
+              
+              private long lastFrameTime = 0; // Для Delta Time
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -443,13 +442,20 @@ jobs:
                   cameraProviderFuture.addListener(() -> {
                       try {
                           ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-                          ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                          
+                          ImageAnalysis.Builder builder = new ImageAnalysis.Builder()
                                   .setTargetResolution(new Size(1280, 720)) 
                                   .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                  .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                                  .build();
+                                  .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
 
+                          // СЕКРЕТНОЕ ОРУЖИЕ №1: Отключаем аппаратные OIS и EIS телефона!
+                          Camera2Interop.Extender<ImageAnalysis> ext = new Camera2Interop.Extender<>(builder);
+                          ext.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF);
+                          ext.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF);
+
+                          ImageAnalysis imageAnalysis = builder.build();
                           imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
+                          
                           cameraProvider.unbindAll();
                           cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
                       } catch (Exception e) { e.printStackTrace(); }
@@ -457,6 +463,15 @@ jobs:
               }
 
               private void processFrame(@NonNull ImageProxy image) {
+                  // СЕКРЕТНОЕ ОРУЖИЕ №3: Вычисление Delta Time (Плавность независимо от фризов)
+                  long currentTime = System.currentTimeMillis();
+                  double dt = 1.0;
+                  if (lastFrameTime > 0) {
+                      dt = (currentTime - lastFrameTime) / 33.333; // Нормализация к 30 FPS
+                  }
+                  lastFrameTime = currentTime;
+                  
+                  // СЕКРЕТНОЕ ОРУЖИЕ №2: Трекинг прямо на HD-кадре без "лесенок" округления
                   Mat fullRgba = imageProxyToMat(image);
                   Mat fullGray = new Mat();
                   Imgproc.cvtColor(fullRgba, fullGray, Imgproc.COLOR_RGBA2GRAY);
@@ -476,35 +491,32 @@ jobs:
                   if (actualWidth == 0 || actualHeight == 0) {
                       actualWidth = fullRgba.cols();
                       actualHeight = fullRgba.rows();
-                      trackHeight = (int) (actualHeight * ((double)TRACK_WIDTH / actualWidth));
-                      idealX = (TRACK_WIDTH - tmplW) / 2;
-                      idealY = (trackHeight - tmplH) / 2;
+                      tmplW = actualWidth / 5; // Большой шаблон для точности
+                      tmplH = actualHeight / 5;
+                      idealX = (actualWidth - tmplW) / 2;
+                      idealY = (actualHeight - tmplH) / 2;
                       virtualX = idealX;
                       virtualY = idealY;
                       lastMatchX = idealX;
                       lastMatchY = idealY;
                   }
 
-                  // 1. Уменьшаем копию кадра для быстрого и мощного трекинга
-                  Mat trackGray = new Mat();
-                  Imgproc.resize(fullGray, trackGray, new org.opencv.core.Size(TRACK_WIDTH, trackHeight));
-
                   if (referenceFrame == null) {
-                      referenceFrame = trackGray.clone();
+                      referenceFrame = fullGray.clone();
                       template = new Mat(referenceFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
                   }
 
                   if (manualResetRequested) {
-                      triggerSmoothReset(trackGray);
+                      triggerSmoothReset(fullGray);
                       manualResetRequested = false;
                   }
 
                   int roiX = Math.max(0, lastMatchX - SEARCH_RADIUS);
                   int roiY = Math.max(0, lastMatchY - SEARCH_RADIUS);
-                  int roiW = Math.min(trackGray.cols() - roiX, tmplW + SEARCH_RADIUS * 2);
-                  int roiH = Math.min(trackGray.rows() - roiY, tmplH + SEARCH_RADIUS * 2);
+                  int roiW = Math.min(fullGray.cols() - roiX, tmplW + SEARCH_RADIUS * 2);
+                  int roiH = Math.min(fullGray.rows() - roiY, tmplH + SEARCH_RADIUS * 2);
 
-                  Mat searchRoi = new Mat(trackGray, new Rect(roiX, roiY, roiW, roiH));
+                  Mat searchRoi = new Mat(fullGray, new Rect(roiX, roiY, roiW, roiH));
                   Mat result = new Mat();
                   Imgproc.matchTemplate(searchRoi, template, result, Imgproc.TM_CCOEFF_NORMED);
                   Core.MinMaxLocResult minMax = Core.minMaxLoc(result);
@@ -513,12 +525,11 @@ jobs:
                   int matchY = roiY + (int) minMax.maxLoc.y;
 
                   double jumpDist = Math.hypot(matchX - lastMatchX, matchY - lastMatchY);
-                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > trackGray.cols() - EDGE_MARGIN ||
-                                       matchY < EDGE_MARGIN || matchY + tmplH > trackGray.rows() - EDGE_MARGIN;
+                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > fullGray.cols() - EDGE_MARGIN ||
+                                       matchY < EDGE_MARGIN || matchY + tmplH > fullGray.rows() - EDGE_MARGIN;
 
-                  // Агрессивная логика сброса (как в вебе)
                   if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
-                      triggerSmoothReset(trackGray);
+                      triggerSmoothReset(fullGray);
                       matchX = idealX;
                       matchY = idealY;
                   } else {
@@ -526,39 +537,36 @@ jobs:
                       lastMatchY = matchY;
                   }
 
-                  virtualX += (matchX - virtualX) * currentDriftSpeed;
-                  virtualY += (matchY - virtualY) * currentDriftSpeed;
+                  // Применяем dt к дрейфу для идеальной кинематики
+                  double driftFactor = currentDriftSpeed * dt;
+                  if (driftFactor > 1.0) driftFactor = 1.0; // Защита от резкого скачка времени
+                  
+                  virtualX += (matchX - virtualX) * driftFactor;
+                  virtualY += (matchY - virtualY) * driftFactor;
 
                   double dx = matchX - virtualX;
                   double dy = matchY - virtualY;
-                  
-                  // Пропорционально увеличиваем сдвиг для HD картинки
-                  double scaleToFull = (double)actualWidth / TRACK_WIDTH;
-                  double fullDx = dx * scaleToFull;
-                  double fullDy = dy * scaleToFull;
 
                   Mat M = new Mat(2, 3, CvType.CV_64FC1);
-                  M.put(0, 0, 1, 0, -fullDx, 0, 1, -fullDy);
+                  M.put(0, 0, 1, 0, -dx, 0, 1, -dy);
 
-                  // 2. Создаем слой для UI (с рамками)
                   Mat rgbaUI = fullRgba.clone();
                   
                   if (ghostOffsetX != null && ghostOffsetY != null) {
-                      int gx = (int) ((matchX + ghostOffsetX) * scaleToFull);
-                      int gy = (int) ((matchY + ghostOffsetY) * scaleToFull);
-                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW * scaleToFull, gy + tmplH * scaleToFull), new Scalar(255, 255, 0, 255), 3);
+                      int gx = matchX + ghostOffsetX;
+                      int gy = matchY + ghostOffsetY;
+                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 4);
                   }
                   
-                  Imgproc.rectangle(rgbaUI, new Point(matchX * scaleToFull, matchY * scaleToFull), new Point((matchX + tmplW) * scaleToFull, (matchY + tmplH) * scaleToFull), new Scalar(255, 0, 0, 255), 5);
+                  Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 6);
 
-                  // 3. Стабилизируем оба кадра (чистый HD и HD с рамками)
                   Mat stabilizedClean = new Mat();
                   Imgproc.warpAffine(fullRgba, stabilizedClean, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
                   Mat stabilizedUI = new Mat();
                   Imgproc.warpAffine(rgbaUI, stabilizedUI, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  // 4. Тот самый агрессивный КРОП-буфер, который прячет тряску
+                  // Цифровой кроп (буфер)
                   int cropW = (int) (actualWidth / currentZoom);
                   int cropH = (int) (actualHeight / currentZoom);
                   int startX = Math.max(0, (actualWidth - cropW) / 2);
@@ -574,7 +582,6 @@ jobs:
                   Mat outputResizedUI = new Mat();
                   Imgproc.resize(outputCroppedUI, outputResizedUI, outSize, 0, 0, Imgproc.INTER_LINEAR);
 
-                  // 5. Чистое видео без рамок идет в файл
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
                       Mat bgr = new Mat();
                       Imgproc.cvtColor(outputResizedClean, bgr, Imgproc.COLOR_RGBA2BGR);
@@ -582,15 +589,13 @@ jobs:
                       bgr.release();
                   }
 
-                  // 6. Видео с рамками идет на экран
                   if (displayBitmap == null || displayBitmap.getWidth() != actualWidth || displayBitmap.getHeight() != actualHeight) {
                       displayBitmap = Bitmap.createBitmap(actualWidth, actualHeight, Bitmap.Config.ARGB_8888);
                   }
                   Utils.matToBitmap(outputResizedUI, displayBitmap);
                   runOnUiThread(() -> imageView.setImageBitmap(displayBitmap));
 
-                  // Уборка мусора
-                  fullRgba.release(); fullGray.release(); trackGray.release(); searchRoi.release(); result.release();
+                  fullRgba.release(); fullGray.release(); searchRoi.release(); result.release();
                   M.release(); rgbaUI.release(); 
                   stabilizedClean.release(); stabilizedUI.release();
                   outputCroppedClean.release(); outputResizedClean.release();
