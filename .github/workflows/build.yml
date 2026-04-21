@@ -91,8 +91,8 @@ jobs:
               implementation "com.google.guava:guava:31.1-android"
               implementation 'com.quickbirdstudios:opencv:4.5.3.0'
               
-              // ПРАВИЛЬНАЯ ЧИСТАЯ ВЕРСИЯ FFMPEG-KIT
-              implementation 'com.arthenica:ffmpeg-kit-full:5.1'
+              // ЖЕЛЕЗОБЕТОННАЯ СТАРАЯ ВЕРСИЯ (mobile-ffmpeg)
+              implementation 'com.arthenica:mobile-ffmpeg-full:4.4'
           }
           EOF
 
@@ -244,8 +244,7 @@ jobs:
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
 
-          import com.arthenica.ffmpegkit.FFmpegKit;
-          import com.arthenica.ffmpegkit.ReturnCode;
+          import com.arthenica.mobileffmpeg.FFmpeg;
           import com.google.common.util.concurrent.ListenableFuture;
 
           import org.opencv.android.OpenCVLoader;
@@ -453,7 +452,7 @@ jobs:
                       String finalMp4Path = new File(getExternalCacheDir(), "final_" + System.currentTimeMillis() + ".mp4").getAbsolutePath();
                       String command = String.format("-y -i %s -f s16le -ar 44100 -ac 1 -i %s -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k %s", tempVideoPath, tempAudioPath, finalMp4Path);
                       
-                      FFmpegKit.execute(command);
+                      FFmpeg.execute(command);
                       saveVideoToGallery(finalMp4Path);
                       
                       runOnUiThread(() -> {
