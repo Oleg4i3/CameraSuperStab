@@ -91,8 +91,8 @@ jobs:
               implementation "com.google.guava:guava:31.1-android"
               implementation 'com.quickbirdstudios:opencv:4.5.3.0'
               
-              // ЖЕЛЕЗОБЕТОННАЯ СТАБИЛЬНАЯ ВЕРСИЯ
-              implementation 'com.arthenica:ffmpeg-kit-video:5.1'
+              // ПРАВИЛЬНАЯ ВЕРСИЯ С СУФФИКСОМ .LTS И ВСЕМИ КОДЕКАМИ
+              implementation 'com.arthenica:ffmpeg-kit-full:5.1.LTS'
           }
           EOF
 
@@ -451,7 +451,10 @@ jobs:
                       }
                       
                       String finalMp4Path = new File(getExternalCacheDir(), "final_" + System.currentTimeMillis() + ".mp4").getAbsolutePath();
-                      String command = String.format("-y -i %s -f s16le -ar 44100 -ac 1 -i %s -c:v copy -c:a aac -b:a 128k %s", tempVideoPath, tempAudioPath, finalMp4Path);
+                      
+                      // FFmpeg конвертирует MJPEG(avi) в H.264(mp4) и накладывает звук. 
+                      // Используется пресет ultrafast, чтобы обработка на телефоне занимала 1-2 секунды.
+                      String command = String.format("-y -i %s -f s16le -ar 44100 -ac 1 -i %s -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k %s", tempVideoPath, tempAudioPath, finalMp4Path);
                       
                       FFmpegKit.execute(command);
                       saveVideoToGallery(finalMp4Path);
@@ -478,7 +481,7 @@ jobs:
                           byte[] buffer = new byte[8192];
                           int read;
                           while ((read = is.read(buffer)) != -1) os.write(buffer, 0, read);
-                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео со звуком сохранено!", Toast.LENGTH_LONG).show());
+                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео со звуком (MP4) сохранено!", Toast.LENGTH_LONG).show());
                       } catch (Exception e) { e.printStackTrace(); }
                   }
                   file.delete(); 
