@@ -60,7 +60,7 @@ jobs:
           android.useAndroidX=true
           EOF
 
-          # build.gradle приложения (добавлена готовая сборка OpenCV)
+          # build.gradle приложения (ДОБАВЛЕНО РЕШЕНИЕ ПРОБЛЕМЫ DUPLICATE CLASS)
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -86,6 +86,12 @@ jobs:
               }
           }
           dependencies {
+              // Принудительно выравниваем версии Kotlin, чтобы избежать Duplicate Class
+              constraints {
+                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22")
+                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22")
+              }
+              
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
               implementation "androidx.camera:camera-core:1.3.0"
@@ -94,7 +100,7 @@ jobs:
               implementation "androidx.camera:camera-view:1.3.0"
               implementation "com.google.guava:guava:31.1-android"
               
-              // ИСПОЛЬЗУЕМ ГОТОВУЮ СБОРКУ OPENCV!
+              // Готовая сборка OpenCV
               implementation 'com.quickbirdstudios:opencv:4.5.3.0'
           }
           EOF
@@ -143,7 +149,7 @@ jobs:
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
 
-          # MainActivity.java (С оптимизацией RGBA)
+          # MainActivity.java
           cat << 'EOF' > app/src/main/java/com/example/eiscamera/MainActivity.java
           package com.example.eiscamera;
 
