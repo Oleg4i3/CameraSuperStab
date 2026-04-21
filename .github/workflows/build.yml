@@ -70,6 +70,11 @@ jobs:
                   targetSdk 34
                   versionCode 1
                   versionName "1.0"
+                  
+                  // Оставляем только нужную архитектуру процессора. Снижает вес APK с 200 МБ до 35 МБ!
+                  ndk {
+                      abiFilters 'arm64-v8a'
+                  }
               }
               buildTypes {
                   release {
@@ -185,7 +190,7 @@ jobs:
                           android:layout_width="80dp"
                           android:layout_height="wrap_content"
                           android:textColor="#FFFFFF"
-                          android:text="Зум: 1.0x" />
+                          android:text="Зум: 1.5x" />
 
                       <SeekBar
                           android:id="@+id/zoomSlider"
@@ -193,7 +198,7 @@ jobs:
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
                           android:max="30"
-                          android:progress="0" />
+                          android:progress="5" />
                   </LinearLayout>
 
                   <LinearLayout
@@ -277,18 +282,15 @@ jobs:
               private TextView zoomLabel, driftLabel;
               
               private ExecutorService cameraExecutor;
-              private Camera cameraXInstance;
 
-              // Динамические параметры, вычисляемые от разрешения
-              private int searchRadius = 0;
-              private int maxShift = 0;
-              private int edgeMargin = 0;
-              
-              // Агрессивный кроп (1.35x), дающий большой запас хода для матрицы,
-              // чтобы реже упираться в края и обеспечивать "эффект штатива"
-              private static final double EIS_DIGITAL_ZOOM = 1.35; 
+              // Оригинальные параметры из веб-версии
+              private static final int TRACK_WIDTH = 640; // Сжимаем до 640p для агрессивного трекинга
+              private static final int SEARCH_RADIUS = 80;
+              private static final int MAX_SHIFT = 60; // Максимально допустимый скачок
+              private static final int EDGE_MARGIN = 20;
 
-              private double currentZoom = 1.0;
+              // Вернули ЦИФРОВОЙ зум, он же "буфер стабилизации"
+              private double currentZoom = 1.5;
               private double currentDriftSpeed = 0.03;
 
               private Mat referenceFrame = null;
@@ -304,8 +306,10 @@ jobs:
               
               private int actualWidth = 0;
               private int actualHeight = 0;
-              private int tmplW = 0;
-              private int tmplH = 0;
+              private int trackHeight = 0;
+              
+              private int tmplW = 150;
+              private int tmplH = 150;
               private int idealX = 0;
               private int idealY = 0;
 
@@ -313,19 +317,7 @@ jobs:
               private boolean isRecording = false;
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
-              
               private Bitmap displayBitmap = null;
-              
-              // Переиспользуемые матрицы для полного избавления от микро-фризов GC
-              private Mat grayMat = new Mat();
-              private Mat searchRoiMat = new Mat();
-              private Mat resultMat = new Mat();
-              private Mat transformMatrix = new Mat(2, 3, CvType.CV_64FC1);
-              private Mat stabilizedClean = new Mat();
-              private Mat stabilizedUI = new Mat();
-              private Mat outputResizedClean = new Mat();
-              private Mat outputResizedUI = new Mat();
-              private Mat bgrMat = new Mat();
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -358,9 +350,6 @@ jobs:
                       public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                           currentZoom = 1.0 + (progress / 10.0);
                           zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
-                          if (cameraXInstance != null) {
-                              cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
-                          }
                       }
                       @Override public void onStartTrackingTouch(SeekBar seekBar) {}
                       @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -388,10 +377,7 @@ jobs:
                               File tempFile = new File(cacheDir, "temp_video.avi");
                               tempVideoPath = tempFile.getAbsolutePath();
                               
-                              int outW = actualWidth;
-                              int outH = actualHeight;
-                              
-                              videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(outW, outH));
+                              videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
                               
                               if (videoWriter.isOpened()) {
                                   isRecording = true;
@@ -465,76 +451,74 @@ jobs:
 
                           imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
                           cameraProvider.unbindAll();
-                          cameraXInstance = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
-                          cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
+                          cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
                       } catch (Exception e) { e.printStackTrace(); }
                   }, ContextCompat.getMainExecutor(this));
               }
 
               private void processFrame(@NonNull ImageProxy image) {
-                  Mat rgba = imageProxyToMat(image);
-                  Imgproc.cvtColor(rgba, grayMat, Imgproc.COLOR_RGBA2GRAY);
+                  Mat fullRgba = imageProxyToMat(image);
+                  Mat fullGray = new Mat();
+                  Imgproc.cvtColor(fullRgba, fullGray, Imgproc.COLOR_RGBA2GRAY);
 
                   int rotation = image.getImageInfo().getRotationDegrees();
                   if (rotation == 90) {
-                      Core.rotate(rgba, rgba, Core.ROTATE_90_CLOCKWISE);
-                      Core.rotate(grayMat, grayMat, Core.ROTATE_90_CLOCKWISE);
+                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_CLOCKWISE);
+                      Core.rotate(fullGray, fullGray, Core.ROTATE_90_CLOCKWISE);
                   } else if (rotation == 270) {
-                      Core.rotate(rgba, rgba, Core.ROTATE_90_COUNTERCLOCKWISE);
-                      Core.rotate(grayMat, grayMat, Core.ROTATE_90_COUNTERCLOCKWISE);
+                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_COUNTERCLOCKWISE);
+                      Core.rotate(fullGray, fullGray, Core.ROTATE_90_COUNTERCLOCKWISE);
                   } else if (rotation == 180) {
-                      Core.rotate(rgba, rgba, Core.ROTATE_180);
-                      Core.rotate(grayMat, grayMat, Core.ROTATE_180);
+                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_180);
+                      Core.rotate(fullGray, fullGray, Core.ROTATE_180);
                   }
 
-                  // Инициализация динамических масштабов
                   if (actualWidth == 0 || actualHeight == 0) {
-                      actualWidth = rgba.cols();
-                      actualHeight = rgba.rows();
-                      
-                      tmplW = (int) (actualWidth * 0.25); // 25% ширины экрана
-                      tmplH = (int) (actualHeight * 0.35); // 35% высоты экрана
-                      searchRadius = (int) (actualWidth * 0.20); // 20% - огромный радиус поиска для удержания рывков
-                      maxShift = (int) (actualWidth * 0.15); // Лимит скорости сдвига
-                      edgeMargin = (int) (actualWidth * 0.02); // Можно доходить почти до края рамки
-                      
-                      idealX = (actualWidth - tmplW) / 2;
-                      idealY = (actualHeight - tmplH) / 2;
+                      actualWidth = fullRgba.cols();
+                      actualHeight = fullRgba.rows();
+                      trackHeight = (int) (actualHeight * ((double)TRACK_WIDTH / actualWidth));
+                      idealX = (TRACK_WIDTH - tmplW) / 2;
+                      idealY = (trackHeight - tmplH) / 2;
                       virtualX = idealX;
                       virtualY = idealY;
                       lastMatchX = idealX;
                       lastMatchY = idealY;
                   }
 
+                  // 1. Уменьшаем копию кадра для быстрого и мощного трекинга
+                  Mat trackGray = new Mat();
+                  Imgproc.resize(fullGray, trackGray, new org.opencv.core.Size(TRACK_WIDTH, trackHeight));
+
                   if (referenceFrame == null) {
-                      referenceFrame = grayMat.clone();
+                      referenceFrame = trackGray.clone();
                       template = new Mat(referenceFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
                   }
 
                   if (manualResetRequested) {
-                      triggerSmoothReset(grayMat);
+                      triggerSmoothReset(trackGray);
                       manualResetRequested = false;
                   }
 
-                  int roiX = Math.max(0, lastMatchX - searchRadius);
-                  int roiY = Math.max(0, lastMatchY - searchRadius);
-                  int roiW = Math.min(rgba.cols() - roiX, tmplW + searchRadius * 2);
-                  int roiH = Math.min(rgba.rows() - roiY, tmplH + searchRadius * 2);
+                  int roiX = Math.max(0, lastMatchX - SEARCH_RADIUS);
+                  int roiY = Math.max(0, lastMatchY - SEARCH_RADIUS);
+                  int roiW = Math.min(trackGray.cols() - roiX, tmplW + SEARCH_RADIUS * 2);
+                  int roiH = Math.min(trackGray.rows() - roiY, tmplH + SEARCH_RADIUS * 2);
 
-                  searchRoiMat = new Mat(grayMat, new Rect(roiX, roiY, roiW, roiH));
-                  Imgproc.matchTemplate(searchRoiMat, template, resultMat, Imgproc.TM_CCOEFF_NORMED);
-                  Core.MinMaxLocResult minMax = Core.minMaxLoc(resultMat);
+                  Mat searchRoi = new Mat(trackGray, new Rect(roiX, roiY, roiW, roiH));
+                  Mat result = new Mat();
+                  Imgproc.matchTemplate(searchRoi, template, result, Imgproc.TM_CCOEFF_NORMED);
+                  Core.MinMaxLocResult minMax = Core.minMaxLoc(result);
 
                   int matchX = roiX + (int) minMax.maxLoc.x;
                   int matchY = roiY + (int) minMax.maxLoc.y;
 
                   double jumpDist = Math.hypot(matchX - lastMatchX, matchY - lastMatchY);
-                  boolean isNearEdge = matchX < edgeMargin || matchX + tmplW > actualWidth - edgeMargin ||
-                                       matchY < edgeMargin || matchY + tmplH > actualHeight - edgeMargin;
+                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > trackGray.cols() - EDGE_MARGIN ||
+                                       matchY < EDGE_MARGIN || matchY + tmplH > trackGray.rows() - EDGE_MARGIN;
 
-                  // Если цель потеряна - плавно переводим фокус без резких рывков
-                  if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > maxShift) {
-                      triggerSmoothReset(grayMat);
+                  // Агрессивная логика сброса (как в вебе)
+                  if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
+                      triggerSmoothReset(trackGray);
                       matchX = idealX;
                       matchY = idealY;
                   } else {
@@ -547,47 +531,70 @@ jobs:
 
                   double dx = matchX - virtualX;
                   double dy = matchY - virtualY;
-                  transformMatrix.put(0, 0, 1, 0, -dx, 0, 1, -dy);
+                  
+                  // Пропорционально увеличиваем сдвиг для HD картинки
+                  double scaleToFull = (double)actualWidth / TRACK_WIDTH;
+                  double fullDx = dx * scaleToFull;
+                  double fullDy = dy * scaleToFull;
 
-                  Mat rgbaUI = rgba.clone();
+                  Mat M = new Mat(2, 3, CvType.CV_64FC1);
+                  M.put(0, 0, 1, 0, -fullDx, 0, 1, -fullDy);
+
+                  // 2. Создаем слой для UI (с рамками)
+                  Mat rgbaUI = fullRgba.clone();
                   
                   if (ghostOffsetX != null && ghostOffsetY != null) {
-                      int gx = matchX + ghostOffsetX;
-                      int gy = matchY + ghostOffsetY;
-                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 3);
+                      int gx = (int) ((matchX + ghostOffsetX) * scaleToFull);
+                      int gy = (int) ((matchY + ghostOffsetY) * scaleToFull);
+                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW * scaleToFull, gy + tmplH * scaleToFull), new Scalar(255, 255, 0, 255), 3);
                   }
                   
-                  Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 4);
+                  Imgproc.rectangle(rgbaUI, new Point(matchX * scaleToFull, matchY * scaleToFull), new Point((matchX + tmplW) * scaleToFull, (matchY + tmplH) * scaleToFull), new Scalar(255, 0, 0, 255), 5);
 
-                  Imgproc.warpAffine(rgba, stabilizedClean, transformMatrix, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
-                  Imgproc.warpAffine(rgbaUI, stabilizedUI, transformMatrix, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+                  // 3. Стабилизируем оба кадра (чистый HD и HD с рамками)
+                  Mat stabilizedClean = new Mat();
+                  Imgproc.warpAffine(fullRgba, stabilizedClean, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  int cropW = (int) (actualWidth / EIS_DIGITAL_ZOOM);
-                  int cropH = (int) (actualHeight / EIS_DIGITAL_ZOOM);
-                  int startX = (actualWidth - cropW) / 2;
-                  int startY = (actualHeight - cropH) / 2;
+                  Mat stabilizedUI = new Mat();
+                  Imgproc.warpAffine(rgbaUI, stabilizedUI, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+
+                  // 4. Тот самый агрессивный КРОП-буфер, который прячет тряску
+                  int cropW = (int) (actualWidth / currentZoom);
+                  int cropH = (int) (actualHeight / currentZoom);
+                  int startX = Math.max(0, (actualWidth - cropW) / 2);
+                  int startY = Math.max(0, (actualHeight - cropH) / 2);
                   Rect cropRect = new Rect(startX, startY, cropW, cropH);
                   org.opencv.core.Size outSize = new org.opencv.core.Size(actualWidth, actualHeight);
 
                   Mat outputCroppedClean = new Mat(stabilizedClean, cropRect);
+                  Mat outputResizedClean = new Mat();
                   Imgproc.resize(outputCroppedClean, outputResizedClean, outSize, 0, 0, Imgproc.INTER_LINEAR);
 
                   Mat outputCroppedUI = new Mat(stabilizedUI, cropRect);
+                  Mat outputResizedUI = new Mat();
                   Imgproc.resize(outputCroppedUI, outputResizedUI, outSize, 0, 0, Imgproc.INTER_LINEAR);
 
+                  // 5. Чистое видео без рамок идет в файл
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
-                      Imgproc.cvtColor(outputResizedClean, bgrMat, Imgproc.COLOR_RGBA2BGR);
-                      videoWriter.write(bgrMat);
+                      Mat bgr = new Mat();
+                      Imgproc.cvtColor(outputResizedClean, bgr, Imgproc.COLOR_RGBA2BGR);
+                      videoWriter.write(bgr);
+                      bgr.release();
                   }
 
+                  // 6. Видео с рамками идет на экран
                   if (displayBitmap == null || displayBitmap.getWidth() != actualWidth || displayBitmap.getHeight() != actualHeight) {
                       displayBitmap = Bitmap.createBitmap(actualWidth, actualHeight, Bitmap.Config.ARGB_8888);
                   }
                   Utils.matToBitmap(outputResizedUI, displayBitmap);
                   runOnUiThread(() -> imageView.setImageBitmap(displayBitmap));
 
-                  rgba.release(); rgbaUI.release(); 
-                  outputCroppedClean.release(); outputCroppedUI.release();
+                  // Уборка мусора
+                  fullRgba.release(); fullGray.release(); trackGray.release(); searchRoi.release(); result.release();
+                  M.release(); rgbaUI.release(); 
+                  stabilizedClean.release(); stabilizedUI.release();
+                  outputCroppedClean.release(); outputResizedClean.release();
+                  outputCroppedUI.release(); outputResizedUI.release();
                   image.close();
               }
 
