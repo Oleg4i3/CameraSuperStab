@@ -225,10 +225,13 @@ jobs:
           package com.example.eiscamera;
 
           import android.Manifest;
+          import android.content.ContentValues;
           import android.content.pm.PackageManager;
           import android.graphics.Bitmap;
+          import android.net.Uri;
           import android.os.Bundle;
           import android.os.Environment;
+          import android.provider.MediaStore;
           import android.util.Size;
           import android.widget.Button;
           import android.widget.ImageView;
@@ -260,6 +263,9 @@ jobs:
           import org.opencv.videoio.VideoWriter;
 
           import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.InputStream;
+          import java.io.OutputStream;
           import java.nio.ByteBuffer;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
@@ -273,8 +279,9 @@ jobs:
               private ExecutorService cameraExecutor;
               private Camera cameraXInstance;
 
+              // Оригинальные параметры из веб-версии
               private static final int SEARCH_RADIUS = 60;
-              private static final int MAX_SHIFT = 60; // Максимальный сдвиг. На это значение мы обрежем края.
+              private static final int MAX_SHIFT = 40; // Вернул жесткий допуск 40
               private static final int EDGE_MARGIN = 20;
 
               private double currentZoom = 1.0;
@@ -288,7 +295,6 @@ jobs:
               private int lastMatchX = 0;
               private int lastMatchY = 0;
               
-              // Динамические переменные для реального разрешения матрицы
               private int actualWidth = 0;
               private int actualHeight = 0;
               private int tmplW = 150;
@@ -299,6 +305,7 @@ jobs:
               private boolean manualResetRequested = false;
               private boolean isRecording = false;
               private VideoWriter videoWriter = null;
+              private String tempVideoPath = null;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -314,20 +321,17 @@ jobs:
                   driftLabel = findViewById(R.id.driftLabel);
 
                   OpenCVLoader.initDebug();
-
                   setupUI();
 
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                       startCamera();
                   } else {
-                      // Запрос разрешения при запуске
                       ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 10);
                   }
 
                   cameraExecutor = Executors.newSingleThreadExecutor();
               }
 
-              // Обработка ответа пользователя на запрос разрешений
               @Override
               public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
                   super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -344,7 +348,7 @@ jobs:
                       public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                           currentZoom = 1.0 + (progress / 10.0);
                           zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
-                          // Аппаратный зум
+                          // Применяем ТОЛЬКО аппаратный (нативный) зум камеры
                           if (cameraXInstance != null) {
                               cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
                           }
@@ -366,19 +370,21 @@ jobs:
                   resetBtn.setOnClickListener(v -> manualResetRequested = true);
 
                   recordBtn.setOnClickListener(v -> {
-                      if (actualWidth == 0 || actualHeight == 0) {
-                          Toast.makeText(this, "Камера еще не запустилась, подождите", Toast.LENGTH_SHORT).show();
-                          return;
-                      }
+                      if (actualWidth == 0 || actualHeight == 0) return;
 
                       if (!isRecording) {
                           try {
-                              File moviesDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
-                              if (moviesDir != null && !moviesDir.exists()) moviesDir.mkdirs();
-                              String path = new File(moviesDir, "stabilized_" + System.currentTimeMillis() + ".avi").getAbsolutePath();
+                              // Пишем во временный скрытый кэш
+                              File cacheDir = getExternalCacheDir();
+                              if (cacheDir == null) cacheDir = getCacheDir();
+                              File tempFile = new File(cacheDir, "temp_video.avi");
+                              tempVideoPath = tempFile.getAbsolutePath();
                               
-                              // Используем точное динамическое разрешение
-                              videoWriter = new VideoWriter(path, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
+                              // Учитываем обрезку (MAX_SHIFT) при создании файла видео
+                              int outW = actualWidth - (MAX_SHIFT * 2);
+                              int outH = actualHeight - (MAX_SHIFT * 2);
+                              
+                              videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(outW, outH));
                               
                               if (videoWriter.isOpened()) {
                                   isRecording = true;
@@ -386,19 +392,62 @@ jobs:
                                   recordBtn.setBackgroundColor(0xFFFF0000);
                                   Toast.makeText(this, "Запись начата!", Toast.LENGTH_SHORT).show();
                               } else {
-                                  Toast.makeText(this, "Ошибка создания кодека видео", Toast.LENGTH_LONG).show();
+                                  Toast.makeText(this, "Ошибка запуска кодека", Toast.LENGTH_LONG).show();
                               }
                           } catch (Exception e) {
-                              Toast.makeText(this, "Ошибка записи: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                              Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
                           }
                       } else {
                           isRecording = false;
-                          if (videoWriter != null) videoWriter.release();
-                          recordBtn.setText("🔴 Начать запись");
-                          recordBtn.setBackgroundColor(0xFF28A745);
-                          Toast.makeText(this, "Видео сохранено в папке Movies", Toast.LENGTH_LONG).show();
+                          recordBtn.setText("⏳ Сохранение...");
+                          recordBtn.setEnabled(false);
+                          
+                          // Останавливаем запись и копируем в Галерею в фоне
+                          cameraExecutor.execute(() -> {
+                              if (videoWriter != null) {
+                                  videoWriter.release();
+                                  videoWriter = null;
+                              }
+                              saveVideoToGallery(tempVideoPath);
+                              
+                              runOnUiThread(() -> {
+                                  recordBtn.setEnabled(true);
+                                  recordBtn.setText("🔴 Начать запись");
+                                  recordBtn.setBackgroundColor(0xFF28A745);
+                              });
+                          });
                       }
                   });
+              }
+              
+              // Экспорт видео из кэша в общую Галерею (через MediaStore)
+              private void saveVideoToGallery(String path) {
+                  File file = new File(path);
+                  if (!file.exists()) return;
+
+                  ContentValues values = new ContentValues();
+                  values.put(MediaStore.Video.Media.DISPLAY_NAME, "Stabilized_" + System.currentTimeMillis() + ".avi");
+                  values.put(MediaStore.Video.Media.MIME_TYPE, "video/avi");
+                  values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EIS_Camera");
+
+                  Uri uri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
+                  if (uri != null) {
+                      try (OutputStream os = getContentResolver().openOutputStream(uri);
+                           InputStream is = new FileInputStream(file)) {
+                          byte[] buffer = new byte[8192];
+                          int read;
+                          while ((read = is.read(buffer)) != -1) {
+                              os.write(buffer, 0, read);
+                          }
+                          runOnUiThread(() -> Toast.makeText(this, "✅ Видео в Галерее (папка Movies/EIS_Camera)!", Toast.LENGTH_LONG).show());
+                      } catch (Exception e) {
+                          e.printStackTrace();
+                          runOnUiThread(() -> Toast.makeText(this, "Ошибка сохранения: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                      }
+                  } else {
+                      runOnUiThread(() -> Toast.makeText(this, "Ошибка доступа к Медиахранилищу", Toast.LENGTH_SHORT).show());
+                  }
+                  file.delete(); // Удаляем временный файл
               }
 
               private void startCamera() {
@@ -407,7 +456,7 @@ jobs:
                       try {
                           ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
                           ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                                  .setTargetResolution(new Size(1280, 720)) // Запрашиваем HD качество
+                                  .setTargetResolution(new Size(1280, 720)) 
                                   .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                   .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                                   .build();
@@ -415,8 +464,6 @@ jobs:
                           imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
                           cameraProvider.unbindAll();
                           cameraXInstance = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
-                          
-                          // Применяем стартовый аппаратный зум
                           cameraXInstance.getCameraControl().setZoomRatio((float) currentZoom);
                       } catch (Exception e) { e.printStackTrace(); }
                   }, ContextCompat.getMainExecutor(this));
@@ -439,7 +486,6 @@ jobs:
                       Core.rotate(gray, gray, Core.ROTATE_180);
                   }
 
-                  // Инициализация размеров при первом кадре
                   if (actualWidth == 0 || actualHeight == 0) {
                       actualWidth = rgba.cols();
                       actualHeight = rgba.rows();
@@ -480,6 +526,7 @@ jobs:
                   boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > rgba.cols() - EDGE_MARGIN ||
                                        matchY < EDGE_MARGIN || matchY + tmplH > rgba.rows() - EDGE_MARGIN;
 
+                  // Жесткая проверка на хаотичный скачок как в HTML
                   if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
                       triggerSmoothReset(gray);
                       matchX = idealX;
@@ -502,7 +549,7 @@ jobs:
                   Mat stabilizedSrc = new Mat();
                   Imgproc.warpAffine(rgba, stabilizedSrc, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  // Невидимый фиксированный кроп, чтобы скрыть черные полосы от стабилизации (на размер MAX_SHIFT)
+                  // Вырезаем только мертвые черные зоны (никакого цифрового "мыльного" зума)
                   int cropW = actualWidth - (MAX_SHIFT * 2);
                   int cropH = actualHeight - (MAX_SHIFT * 2);
                   int startX = MAX_SHIFT;
@@ -510,13 +557,12 @@ jobs:
 
                   Mat outputCropped = new Mat(stabilizedSrc, new Rect(startX, startY, cropW, cropH));
                   Mat outputResized = new Mat();
-                  // Растягиваем обратно до начального размера кадра
                   Imgproc.resize(outputCropped, outputResized, new org.opencv.core.Size(actualWidth, actualHeight), 0, 0, Imgproc.INTER_LINEAR);
 
-                  // Запись видео
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
                       Mat bgr = new Mat();
-                      Imgproc.cvtColor(outputResized, bgr, Imgproc.COLOR_RGBA2BGR);
+                      // Для записи отдаем кадр реального обрезанного размера, чтобы кодек не ругался
+                      Imgproc.cvtColor(outputCropped, bgr, Imgproc.COLOR_RGBA2BGR);
                       videoWriter.write(bgr);
                       bgr.release();
                   }
