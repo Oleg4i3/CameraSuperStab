@@ -279,12 +279,14 @@ jobs:
               private ExecutorService cameraExecutor;
               private Camera cameraXInstance;
 
-              private static final int SEARCH_RADIUS = 60;
-              private static final int MAX_SHIFT = 40;
-              private static final int EDGE_MARGIN = 20;
+              // Динамические параметры, вычисляемые от разрешения
+              private int searchRadius = 0;
+              private int maxShift = 0;
+              private int edgeMargin = 0;
               
-              // Базовый кроп, обеспечивающий "буфер" для идеальной плавности перетекания
-              private static final double EIS_DIGITAL_ZOOM = 1.2; 
+              // Агрессивный кроп (1.35x), дающий большой запас хода для матрицы,
+              // чтобы реже упираться в края и обеспечивать "эффект штатива"
+              private static final double EIS_DIGITAL_ZOOM = 1.35; 
 
               private double currentZoom = 1.0;
               private double currentDriftSpeed = 0.03;
@@ -302,8 +304,8 @@ jobs:
               
               private int actualWidth = 0;
               private int actualHeight = 0;
-              private int tmplW = 150;
-              private int tmplH = 150;
+              private int tmplW = 0;
+              private int tmplH = 0;
               private int idealX = 0;
               private int idealY = 0;
 
@@ -312,8 +314,18 @@ jobs:
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
               
-              // Оптимизация памяти, чтобы предотвратить микро-фризы сборщика мусора
               private Bitmap displayBitmap = null;
+              
+              // Переиспользуемые матрицы для полного избавления от микро-фризов GC
+              private Mat grayMat = new Mat();
+              private Mat searchRoiMat = new Mat();
+              private Mat resultMat = new Mat();
+              private Mat transformMatrix = new Mat(2, 3, CvType.CV_64FC1);
+              private Mat stabilizedClean = new Mat();
+              private Mat stabilizedUI = new Mat();
+              private Mat outputResizedClean = new Mat();
+              private Mat outputResizedUI = new Mat();
+              private Mat bgrMat = new Mat();
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -461,26 +473,31 @@ jobs:
 
               private void processFrame(@NonNull ImageProxy image) {
                   Mat rgba = imageProxyToMat(image);
-                  Mat gray = new Mat();
-                  Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+                  Imgproc.cvtColor(rgba, grayMat, Imgproc.COLOR_RGBA2GRAY);
 
                   int rotation = image.getImageInfo().getRotationDegrees();
                   if (rotation == 90) {
                       Core.rotate(rgba, rgba, Core.ROTATE_90_CLOCKWISE);
-                      Core.rotate(gray, gray, Core.ROTATE_90_CLOCKWISE);
+                      Core.rotate(grayMat, grayMat, Core.ROTATE_90_CLOCKWISE);
                   } else if (rotation == 270) {
                       Core.rotate(rgba, rgba, Core.ROTATE_90_COUNTERCLOCKWISE);
-                      Core.rotate(gray, gray, Core.ROTATE_90_COUNTERCLOCKWISE);
+                      Core.rotate(grayMat, grayMat, Core.ROTATE_90_COUNTERCLOCKWISE);
                   } else if (rotation == 180) {
                       Core.rotate(rgba, rgba, Core.ROTATE_180);
-                      Core.rotate(gray, gray, Core.ROTATE_180);
+                      Core.rotate(grayMat, grayMat, Core.ROTATE_180);
                   }
 
+                  // Инициализация динамических масштабов
                   if (actualWidth == 0 || actualHeight == 0) {
                       actualWidth = rgba.cols();
                       actualHeight = rgba.rows();
-                      tmplW = actualWidth / 5;
-                      tmplH = actualHeight / 5;
+                      
+                      tmplW = (int) (actualWidth * 0.25); // 25% ширины экрана
+                      tmplH = (int) (actualHeight * 0.35); // 35% высоты экрана
+                      searchRadius = (int) (actualWidth * 0.20); // 20% - огромный радиус поиска для удержания рывков
+                      maxShift = (int) (actualWidth * 0.15); // Лимит скорости сдвига
+                      edgeMargin = (int) (actualWidth * 0.02); // Можно доходить почти до края рамки
+                      
                       idealX = (actualWidth - tmplW) / 2;
                       idealY = (actualHeight - tmplH) / 2;
                       virtualX = idealX;
@@ -490,34 +507,34 @@ jobs:
                   }
 
                   if (referenceFrame == null) {
-                      referenceFrame = gray.clone();
+                      referenceFrame = grayMat.clone();
                       template = new Mat(referenceFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
                   }
 
                   if (manualResetRequested) {
-                      triggerSmoothReset(gray);
+                      triggerSmoothReset(grayMat);
                       manualResetRequested = false;
                   }
 
-                  int roiX = Math.max(0, lastMatchX - SEARCH_RADIUS);
-                  int roiY = Math.max(0, lastMatchY - SEARCH_RADIUS);
-                  int roiW = Math.min(rgba.cols() - roiX, tmplW + SEARCH_RADIUS * 2);
-                  int roiH = Math.min(rgba.rows() - roiY, tmplH + SEARCH_RADIUS * 2);
+                  int roiX = Math.max(0, lastMatchX - searchRadius);
+                  int roiY = Math.max(0, lastMatchY - searchRadius);
+                  int roiW = Math.min(rgba.cols() - roiX, tmplW + searchRadius * 2);
+                  int roiH = Math.min(rgba.rows() - roiY, tmplH + searchRadius * 2);
 
-                  Mat searchRoi = new Mat(gray, new Rect(roiX, roiY, roiW, roiH));
-                  Mat result = new Mat();
-                  Imgproc.matchTemplate(searchRoi, template, result, Imgproc.TM_CCOEFF_NORMED);
-                  Core.MinMaxLocResult minMax = Core.minMaxLoc(result);
+                  searchRoiMat = new Mat(grayMat, new Rect(roiX, roiY, roiW, roiH));
+                  Imgproc.matchTemplate(searchRoiMat, template, resultMat, Imgproc.TM_CCOEFF_NORMED);
+                  Core.MinMaxLocResult minMax = Core.minMaxLoc(resultMat);
 
                   int matchX = roiX + (int) minMax.maxLoc.x;
                   int matchY = roiY + (int) minMax.maxLoc.y;
 
                   double jumpDist = Math.hypot(matchX - lastMatchX, matchY - lastMatchY);
-                  boolean isNearEdge = matchX < EDGE_MARGIN || matchX + tmplW > rgba.cols() - EDGE_MARGIN ||
-                                       matchY < EDGE_MARGIN || matchY + tmplH > rgba.rows() - EDGE_MARGIN;
+                  boolean isNearEdge = matchX < edgeMargin || matchX + tmplW > actualWidth - edgeMargin ||
+                                       matchY < edgeMargin || matchY + tmplH > actualHeight - edgeMargin;
 
-                  if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
-                      triggerSmoothReset(gray);
+                  // Если цель потеряна - плавно переводим фокус без резких рывков
+                  if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > maxShift) {
+                      triggerSmoothReset(grayMat);
                       matchX = idealX;
                       matchY = idealY;
                   } else {
@@ -530,28 +547,21 @@ jobs:
 
                   double dx = matchX - virtualX;
                   double dy = matchY - virtualY;
-                  Mat M = new Mat(2, 3, CvType.CV_64FC1);
-                  M.put(0, 0, 1, 0, -dx, 0, 1, -dy);
+                  transformMatrix.put(0, 0, 1, 0, -dx, 0, 1, -dy);
 
-                  // 1. Создаем отдельный слой для UI (Рисуем рамки)
                   Mat rgbaUI = rgba.clone();
                   
                   if (ghostOffsetX != null && ghostOffsetY != null) {
                       int gx = matchX + ghostOffsetX;
                       int gy = matchY + ghostOffsetY;
-                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 2);
+                      Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 3);
                   }
                   
-                  Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 3);
+                  Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 4);
 
-                  // 2. Стабилизируем оба кадра (чистый и с UI)
-                  Mat stabilizedClean = new Mat();
-                  Imgproc.warpAffine(rgba, stabilizedClean, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+                  Imgproc.warpAffine(rgba, stabilizedClean, transformMatrix, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
+                  Imgproc.warpAffine(rgbaUI, stabilizedUI, transformMatrix, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  Mat stabilizedUI = new Mat();
-                  Imgproc.warpAffine(rgbaUI, stabilizedUI, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
-
-                  // 3. Выполняем базовый EIS-кроп для плавной стабилизации
                   int cropW = (int) (actualWidth / EIS_DIGITAL_ZOOM);
                   int cropH = (int) (actualHeight / EIS_DIGITAL_ZOOM);
                   int startX = (actualWidth - cropW) / 2;
@@ -560,41 +570,30 @@ jobs:
                   org.opencv.core.Size outSize = new org.opencv.core.Size(actualWidth, actualHeight);
 
                   Mat outputCroppedClean = new Mat(stabilizedClean, cropRect);
-                  Mat outputResizedClean = new Mat();
                   Imgproc.resize(outputCroppedClean, outputResizedClean, outSize, 0, 0, Imgproc.INTER_LINEAR);
 
                   Mat outputCroppedUI = new Mat(stabilizedUI, cropRect);
-                  Mat outputResizedUI = new Mat();
                   Imgproc.resize(outputCroppedUI, outputResizedUI, outSize, 0, 0, Imgproc.INTER_LINEAR);
 
-                  // 4. Пишем чистое видео без рамок!
                   if (isRecording && videoWriter != null && videoWriter.isOpened()) {
-                      Mat bgr = new Mat();
-                      Imgproc.cvtColor(outputResizedClean, bgr, Imgproc.COLOR_RGBA2BGR);
-                      videoWriter.write(bgr);
-                      bgr.release();
+                      Imgproc.cvtColor(outputResizedClean, bgrMat, Imgproc.COLOR_RGBA2BGR);
+                      videoWriter.write(bgrMat);
                   }
 
-                  // 5. Выводим кадр с UI на экран пользователя
                   if (displayBitmap == null || displayBitmap.getWidth() != actualWidth || displayBitmap.getHeight() != actualHeight) {
                       displayBitmap = Bitmap.createBitmap(actualWidth, actualHeight, Bitmap.Config.ARGB_8888);
                   }
                   Utils.matToBitmap(outputResizedUI, displayBitmap);
                   runOnUiThread(() -> imageView.setImageBitmap(displayBitmap));
 
-                  // 6. Очистка памяти для предотвращения OOM и фризов GC
-                  rgba.release(); gray.release(); searchRoi.release(); result.release();
-                  M.release(); rgbaUI.release(); 
-                  stabilizedClean.release(); stabilizedUI.release();
-                  outputCroppedClean.release(); outputResizedClean.release();
-                  outputCroppedUI.release(); outputResizedUI.release();
+                  rgba.release(); rgbaUI.release(); 
+                  outputCroppedClean.release(); outputCroppedUI.release();
                   image.close();
               }
 
               private void triggerSmoothReset(Mat grayFrame) {
                   if (template == null) return;
                   
-                  // Сохраняем "Призрака" старого таргета
                   ghostOffsetX = lastMatchX - idealX;
                   ghostOffsetY = lastMatchY - idealY;
                   
@@ -604,7 +603,6 @@ jobs:
                   template.release();
                   template = new Mat(grayFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
                   
-                  // Точное сохранение оффсета для бесшовного "перетекания"
                   virtualX = idealX - currentDx;
                   virtualY = idealY - currentDy;
                   
