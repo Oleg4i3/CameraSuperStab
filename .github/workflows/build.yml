@@ -25,6 +25,7 @@ jobs:
           mkdir -p app/src/main/java/com/example/eiscamera
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/mipmap
           
           cat << 'EOF' > settings.gradle
@@ -101,14 +102,27 @@ jobs:
           }
           EOF
 
+          # Создаем иконку приложения
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FF0000" android:pathData="M12,12m-3.2,0a3.2,3.2 0,1 1,6.4 0a3.2,3.2 0,1 1,-6.4 0" />
+              <path android:fillColor="#FFFFFF" android:pathData="M9,2L7.17,4H4c-1.1,0 -2,0.9 -2,2v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2h-3.17L15,2H9zm3,15c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5z" />
+          </vector>
+          EOF
+
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-feature android:name="android.hardware.camera" android:required="true" />
               
               <application
                   android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
                   android:label="EIS Camera Pro"
                   android:theme="@style/Theme.AppCompat.NoActionBar">
                   <activity
@@ -144,53 +158,78 @@ jobs:
                   app:layout_constraintTop_toTopOf="parent" />
 
               <LinearLayout
-                  android:layout_width="match_parent"
+                  android:layout_width="320dp"
                   android:layout_height="wrap_content"
                   android:orientation="vertical"
-                  android:background="#88000000"
-                  android:padding="16dp"
-                  app:layout_constraintBottom_toBottomOf="parent">
+                  android:background="#A6000000"
+                  android:padding="8dp"
+                  app:layout_constraintBottom_toBottomOf="parent"
+                  app:layout_constraintStart_toStartOf="parent">
 
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="horizontal"
-                      android:layout_marginBottom="12dp">
+                      android:layout_marginBottom="8dp">
 
                       <Button
                           android:id="@+id/resetBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
-                          android:text="Сброс фокуса"
+                          android:text="Сброс"
+                          android:textSize="12sp"
                           android:backgroundTint="#dc3545"
                           android:textColor="#FFFFFF"
-                          android:layout_marginEnd="8dp"/>
+                          android:layout_marginEnd="4dp"/>
 
                       <Button
                           android:id="@+id/recordBtn"
                           android:layout_width="0dp"
                           android:layout_height="wrap_content"
                           android:layout_weight="1"
-                          android:text="🔴 Начать запись"
+                          android:text="🔴 REC"
+                          android:textSize="12sp"
                           android:backgroundTint="#28a745"
                           android:textColor="#FFFFFF"
-                          android:layout_marginStart="8dp"/>
+                          android:layout_marginStart="4dp"/>
                   </LinearLayout>
 
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="horizontal"
-                      android:gravity="center_vertical">
+                      android:gravity="center_vertical"
+                      android:layout_marginBottom="4dp">
+                      <CheckBox
+                          android:id="@+id/mfCheck"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="MF"
+                          android:textColor="#FFF" />
+                      <SeekBar
+                          android:id="@+id/focusSlider"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="100"
+                          android:progress="0"
+                          android:enabled="false" />
+                  </LinearLayout>
 
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:layout_marginBottom="4dp">
                       <TextView
                           android:id="@+id/zoomLabel"
-                          android:layout_width="80dp"
+                          android:layout_width="60dp"
                           android:layout_height="wrap_content"
                           android:textColor="#FFFFFF"
+                          android:textSize="10sp"
                           android:text="Зум: 1.5x" />
-
                       <SeekBar
                           android:id="@+id/zoomSlider"
                           android:layout_width="0dp"
@@ -199,20 +238,20 @@ jobs:
                           android:max="30"
                           android:progress="5" />
                   </LinearLayout>
-
+                  
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="horizontal"
-                      android:gravity="center_vertical">
-
+                      android:gravity="center_vertical"
+                      android:layout_marginBottom="8dp">
                       <TextView
                           android:id="@+id/driftLabel"
-                          android:layout_width="80dp"
+                          android:layout_width="60dp"
                           android:layout_height="wrap_content"
                           android:textColor="#FFFFFF"
+                          android:textSize="10sp"
                           android:text="Дрейф: 0.03" />
-
                       <SeekBar
                           android:id="@+id/driftSlider"
                           android:layout_width="0dp"
@@ -221,6 +260,45 @@ jobs:
                           android:max="100"
                           android:progress="30" />
                   </LinearLayout>
+
+                  <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#55FFFFFF" android:layout_marginBottom="4dp"/>
+                  
+                  <Spinner
+                      android:id="@+id/audioSourceSpinner"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:backgroundTint="#FFFFFF"
+                      android:layout_marginBottom="4dp" />
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <TextView
+                          android:id="@+id/gainLabel"
+                          android:layout_width="60dp"
+                          android:layout_height="wrap_content"
+                          android:textColor="#FFFFFF"
+                          android:textSize="10sp"
+                          android:text="Gain: 0dB" />
+                      <SeekBar
+                          android:id="@+id/gainSlider"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="20"
+                          android:progress="0" />
+                  </LinearLayout>
+                  
+                  <ProgressBar
+                      android:id="@+id/vuMeter"
+                      style="?android:attr/progressBarStyleHorizontal"
+                      android:layout_width="match_parent"
+                      android:layout_height="8dp"
+                      android:max="100"
+                      android:progress="0"
+                      android:progressTint="#00FF00" />
               </LinearLayout>
           </androidx.constraintlayout.widget.ConstraintLayout>
           EOF
@@ -233,20 +311,29 @@ jobs:
           import android.content.pm.PackageManager;
           import android.graphics.Bitmap;
           import android.hardware.camera2.CaptureRequest;
+          import android.media.AudioFormat;
+          import android.media.AudioRecord;
+          import android.media.MediaRecorder;
           import android.net.Uri;
           import android.os.Bundle;
           import android.os.Environment;
           import android.provider.MediaStore;
           import android.util.Size;
+          import android.widget.ArrayAdapter;
           import android.widget.Button;
+          import android.widget.CheckBox;
           import android.widget.ImageView;
+          import android.widget.ProgressBar;
           import android.widget.SeekBar;
+          import android.widget.Spinner;
           import android.widget.TextView;
           import android.widget.Toast;
 
           import androidx.annotation.NonNull;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.camera.camera2.interop.Camera2CameraControl;
           import androidx.camera.camera2.interop.Camera2Interop;
+          import androidx.camera.camera2.interop.CaptureRequestOptions;
           import androidx.camera.core.Camera;
           import androidx.camera.core.CameraSelector;
           import androidx.camera.core.ImageAnalysis;
@@ -270,53 +357,57 @@ jobs:
 
           import java.io.File;
           import java.io.FileInputStream;
+          import java.io.FileOutputStream;
           import java.io.InputStream;
           import java.io.OutputStream;
+          import java.io.RandomAccessFile;
           import java.nio.ByteBuffer;
+          import java.nio.ByteOrder;
           import java.util.concurrent.ExecutorService;
           import java.util.concurrent.Executors;
 
           public class MainActivity extends AppCompatActivity {
               private ImageView imageView;
               private Button resetBtn, recordBtn;
-              private SeekBar zoomSlider, driftSlider;
-              private TextView zoomLabel, driftLabel;
+              private SeekBar zoomSlider, driftSlider, focusSlider, gainSlider;
+              private TextView zoomLabel, driftLabel, gainLabel;
+              private CheckBox mfCheck;
+              private Spinner audioSourceSpinner;
+              private ProgressBar vuMeter;
               
               private ExecutorService cameraExecutor;
+              private Camera camera;
 
-              // Адаптированные под HD (720p) параметры
               private static final int SEARCH_RADIUS = 120;
-              private static final int MAX_SHIFT = 100; // Мертвая хватка (разрешаем сильный сдвиг)
+              private static final int MAX_SHIFT = 100;
               private static final int EDGE_MARGIN = 40;
 
               private double currentZoom = 1.5;
               private double currentDriftSpeed = 0.03;
+              private double currentAudioGainDb = 0.0;
 
               private Mat referenceFrame = null;
               private Mat template = null;
               
-              private double virtualX = 0;
-              private double virtualY = 0;
-              private int lastMatchX = 0;
-              private int lastMatchY = 0;
+              private double virtualX = 0, virtualY = 0;
+              private int lastMatchX = 0, lastMatchY = 0;
+              private Integer ghostOffsetX = null, ghostOffsetY = null;
               
-              private Integer ghostOffsetX = null;
-              private Integer ghostOffsetY = null;
-              
-              private int actualWidth = 0;
-              private int actualHeight = 0;
-              private int tmplW = 0;
-              private int tmplH = 0;
-              private int idealX = 0;
-              private int idealY = 0;
+              private int actualWidth = 0, actualHeight = 0, tmplW = 0, tmplH = 0, idealX = 0, idealY = 0;
 
               private boolean manualResetRequested = false;
               private boolean isRecording = false;
               private VideoWriter videoWriter = null;
               private String tempVideoPath = null;
+              private String tempAudioPath = null;
               private Bitmap displayBitmap = null;
-              
-              private long lastFrameTime = 0; // Для Delta Time
+              private long lastFrameTime = 0;
+
+              // Audio Variables
+              private Thread audioThread = null;
+              private static final int SAMPLE_RATE = 44100;
+              private int bufferSize;
+              private AudioRecord audioRecord;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -328,40 +419,63 @@ jobs:
                   recordBtn = findViewById(R.id.recordBtn);
                   zoomSlider = findViewById(R.id.zoomSlider);
                   driftSlider = findViewById(R.id.driftSlider);
+                  focusSlider = findViewById(R.id.focusSlider);
+                  gainSlider = findViewById(R.id.gainSlider);
                   zoomLabel = findViewById(R.id.zoomLabel);
                   driftLabel = findViewById(R.id.driftLabel);
+                  gainLabel = findViewById(R.id.gainLabel);
+                  mfCheck = findViewById(R.id.mfCheck);
+                  audioSourceSpinner = findViewById(R.id.audioSourceSpinner);
+                  vuMeter = findViewById(R.id.vuMeter);
 
                   OpenCVLoader.initDebug();
                   setupUI();
 
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                  String[] perms = {Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+                      ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                       startCamera();
                   } else {
-                      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 10);
+                      ActivityCompat.requestPermissions(this, perms, 10);
                   }
 
                   cameraExecutor = Executors.newSingleThreadExecutor();
+                  
+                  // Setup Audio Buffer
+                  bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                  startAudioVUMonitoring();
               }
 
               private void setupUI() {
                   zoomSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                      @Override
-                      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                          currentZoom = 1.0 + (progress / 10.0);
-                          zoomLabel.setText(String.format("Зум: %.1fx", currentZoom));
-                      }
-                      @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-                      @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                      @Override public void onProgressChanged(SeekBar sb, int p, boolean b) { currentZoom = 1.0 + (p / 10.0); zoomLabel.setText(String.format("Зум: %.1fx", currentZoom)); }
+                      @Override public void onStartTrackingTouch(SeekBar sb) {} @Override public void onStopTrackingTouch(SeekBar sb) {}
                   });
 
                   driftSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                      @Override
-                      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                          currentDriftSpeed = progress / 1000.0;
-                          driftLabel.setText(String.format("Дрейф: %.3f", currentDriftSpeed));
-                      }
-                      @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-                      @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                      @Override public void onProgressChanged(SeekBar sb, int p, boolean b) { currentDriftSpeed = p / 1000.0; driftLabel.setText(String.format("Дрейф: %.3f", currentDriftSpeed)); }
+                      @Override public void onStartTrackingTouch(SeekBar sb) {} @Override public void onStopTrackingTouch(SeekBar sb) {}
+                  });
+
+                  // Audio setup
+                  String[] sources = {"MIC (Default)", "UNPROCESSED (Raw)", "CAMCORDER"};
+                  ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, sources);
+                  audioSourceSpinner.setAdapter(adapter);
+
+                  gainSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override public void onProgressChanged(SeekBar sb, int p, boolean b) { currentAudioGainDb = p; gainLabel.setText(String.format("Gain: +%ddB", p)); }
+                      @Override public void onStartTrackingTouch(SeekBar sb) {} @Override public void onStopTrackingTouch(SeekBar sb) {}
+                  });
+
+                  // Focus setup
+                  mfCheck.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                      focusSlider.setEnabled(isChecked);
+                      updateFocus();
+                  });
+
+                  focusSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override public void onProgressChanged(SeekBar sb, int p, boolean b) { if(mfCheck.isChecked()) updateFocus(); }
+                      @Override public void onStartTrackingTouch(SeekBar sb) {} @Override public void onStopTrackingTouch(SeekBar sb) {}
                   });
 
                   resetBtn.setOnClickListener(v -> manualResetRequested = true);
@@ -370,57 +484,216 @@ jobs:
                       if (actualWidth == 0 || actualHeight == 0) return;
 
                       if (!isRecording) {
-                          try {
-                              File cacheDir = getExternalCacheDir();
-                              if (cacheDir == null) cacheDir = getCacheDir();
-                              File tempFile = new File(cacheDir, "temp_video.avi");
-                              tempVideoPath = tempFile.getAbsolutePath();
-                              
-                              videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
-                              
-                              if (videoWriter.isOpened()) {
-                                  isRecording = true;
-                                  recordBtn.setText("⏹ Остановить");
-                                  recordBtn.setBackgroundColor(0xFFFF0000);
-                                  Toast.makeText(this, "Запись начата!", Toast.LENGTH_SHORT).show();
-                              } else {
-                                  Toast.makeText(this, "Ошибка запуска кодека", Toast.LENGTH_LONG).show();
-                              }
-                          } catch (Exception e) {
-                              Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                          }
+                          startRecordingSession();
                       } else {
-                          isRecording = false;
-                          recordBtn.setText("⏳ Сохранение...");
-                          recordBtn.setEnabled(false);
-                          
-                          cameraExecutor.execute(() -> {
-                              if (videoWriter != null) {
-                                  videoWriter.release();
-                                  videoWriter = null;
-                              }
-                              saveVideoToGallery(tempVideoPath);
-                              
-                              runOnUiThread(() -> {
-                                  recordBtn.setEnabled(true);
-                                  recordBtn.setText("🔴 Начать запись");
-                                  recordBtn.setBackgroundColor(0xFF28A745);
-                              });
-                          });
+                          stopRecordingSession();
                       }
                   });
               }
 
-              private void saveVideoToGallery(String path) {
+              private void updateFocus() {
+                  if (camera == null) return;
+                  Camera2CameraControl c2Control = Camera2CameraControl.from(camera.getCameraControl());
+                  CaptureRequestOptions.Builder builder = new CaptureRequestOptions.Builder();
+                  
+                  if (mfCheck.isChecked()) {
+                      builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
+                      // Переводим 0-100 слайдера в диоптрии (0.0 = бесконечность, 10.0 = макро)
+                      float focusDistance = (focusSlider.getProgress() / 100f) * 10.0f;
+                      builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance);
+                  } else {
+                      builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
+                  }
+                  c2Control.setCaptureRequestOptions(builder.build());
+              }
+
+              private int getSelectedAudioSource() {
+                  int pos = audioSourceSpinner.getSelectedItemPosition();
+                  if (pos == 1) return MediaRecorder.AudioSource.UNPROCESSED;
+                  if (pos == 2) return MediaRecorder.AudioSource.CAMCORDER;
+                  return MediaRecorder.AudioSource.MIC;
+              }
+
+              private void startRecordingSession() {
+                  try {
+                      File cacheDir = getExternalCacheDir();
+                      if (cacheDir == null) cacheDir = getCacheDir();
+                      
+                      tempVideoPath = new File(cacheDir, "temp_video.avi").getAbsolutePath();
+                      tempAudioPath = new File(cacheDir, "temp_audio.wav").getAbsolutePath();
+                      
+                      videoWriter = new VideoWriter(tempVideoPath, VideoWriter.fourcc('M', 'J', 'P', 'G'), 30.0, new org.opencv.core.Size(actualWidth, actualHeight));
+                      
+                      if (videoWriter.isOpened()) {
+                          isRecording = true;
+                          recordBtn.setText("⏹ СТОП");
+                          recordBtn.setBackgroundColor(0xFFFF0000);
+                          Toast.makeText(this, "Запись начата!", Toast.LENGTH_SHORT).show();
+                      } else {
+                          Toast.makeText(this, "Ошибка запуска кодека видео", Toast.LENGTH_LONG).show();
+                      }
+                  } catch (Exception e) {
+                      Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                  }
+              }
+
+              private void stopRecordingSession() {
+                  isRecording = false;
+                  recordBtn.setText("⏳ Сохранение...");
+                  recordBtn.setEnabled(false);
+                  
+                  cameraExecutor.execute(() -> {
+                      if (videoWriter != null) {
+                          videoWriter.release();
+                          videoWriter = null;
+                      }
+                      
+                      long timestamp = System.currentTimeMillis();
+                      saveToGallery(tempVideoPath, "Stabilized_" + timestamp + ".avi", "video/avi");
+                      saveToGallery(tempAudioPath, "Stabilized_Audio_" + timestamp + ".wav", "audio/wav");
+                      
+                      runOnUiThread(() -> {
+                          recordBtn.setEnabled(true);
+                          recordBtn.setText("🔴 REC");
+                          recordBtn.setBackgroundColor(0xFF28A745);
+                          Toast.makeText(this, "✅ Видео и Звук сохранены!", Toast.LENGTH_LONG).show();
+                      });
+                  });
+              }
+
+              // Фоновый мониторинг звука для VU и записи (если включено)
+              private void startAudioVUMonitoring() {
+                  if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
+                  
+                  audioThread = new Thread(() -> {
+                      int source = MediaRecorder.AudioSource.MIC; // Дефолт до старта записи
+                      audioRecord = new AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize);
+                      if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) return;
+                      
+                      audioRecord.startRecording();
+                      short[] buffer = new short[bufferSize / 2];
+                      
+                      FileOutputStream fos = null;
+                      long totalAudioLen = 0;
+                      long totalDataLen = 0;
+                      boolean wasRecording = false;
+
+                      while (!Thread.interrupted()) {
+                          // Перезапуск источника если начали запись (чтобы применить выбор из Spinner)
+                          if (isRecording && !wasRecording) {
+                              audioRecord.stop();
+                              audioRecord.release();
+                              audioRecord = new AudioRecord(getSelectedAudioSource(), SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize);
+                              audioRecord.startRecording();
+                              wasRecording = true;
+                              try {
+                                  fos = new FileOutputStream(tempAudioPath);
+                                  writeWavHeader(fos, 0, 0, SAMPLE_RATE, 1, 16); // Dummy header
+                                  totalAudioLen = 0;
+                              } catch (Exception e) {}
+                          } else if (!isRecording && wasRecording) {
+                              wasRecording = false;
+                              try {
+                                  if (fos != null) {
+                                      fos.close();
+                                      // Финализация WAV заголовка
+                                      totalDataLen = totalAudioLen + 36;
+                                      RandomAccessFile raf = new RandomAccessFile(tempAudioPath, "rw");
+                                      raf.seek(4); raf.writeInt(Integer.reverseBytes((int)totalDataLen));
+                                      raf.seek(40); raf.writeInt(Integer.reverseBytes((int)totalAudioLen));
+                                      raf.close();
+                                  }
+                              } catch (Exception e) {}
+                              // Возврат на микрофон по умолчанию для VU метра
+                              audioRecord.stop();
+                              audioRecord.release();
+                              audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize);
+                              audioRecord.startRecording();
+                          }
+
+                          int read = audioRecord.read(buffer, 0, buffer.length);
+                          if (read > 0) {
+                              double sum = 0;
+                              double gainLinear = Math.pow(10.0, currentAudioGainDb / 20.0);
+                              
+                              for (int i = 0; i < read; i++) {
+                                  // Применение Gain
+                                  float sample = buffer[i] * (float)gainLinear;
+                                  if (sample > 32767.0f) sample = 32767.0f;
+                                  if (sample < -32768.0f) sample = -32768.0f;
+                                  buffer[i] = (short) sample;
+                                  
+                                  sum += sample * sample;
+                              }
+                              
+                              // Запись в файл
+                              if (isRecording && fos != null) {
+                                  try {
+                                      ByteBuffer byteBuf = ByteBuffer.allocate(read * 2);
+                                      byteBuf.order(ByteOrder.LITTLE_ENDIAN);
+                                      for (int i = 0; i < read; i++) byteBuf.putShort(buffer[i]);
+                                      byte[] bytes = byteBuf.array();
+                                      fos.write(bytes);
+                                      totalAudioLen += bytes.length;
+                                  } catch (Exception e) {}
+                              }
+
+                              // VU Meter Math (RMS to dB)
+                              double rms = Math.sqrt(sum / read);
+                              double db = 20 * Math.log10(rms / 32768.0);
+                              // Map -60dB (0%) to 0dB (100%)
+                              int progress = (int) ((db + 60) * (100.0 / 60.0));
+                              if (progress < 0) progress = 0;
+                              if (progress > 100) progress = 100;
+                              
+                              final int finalProgress = progress;
+                              runOnUiThread(() -> {
+                                  vuMeter.setProgress(finalProgress);
+                                  if (finalProgress > 90) vuMeter.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFFFF0000));
+                                  else if (finalProgress > 70) vuMeter.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFFFFFF00));
+                                  else vuMeter.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFF00FF00));
+                              });
+                          }
+                      }
+                  });
+                  audioThread.start();
+              }
+
+              private void writeWavHeader(FileOutputStream out, long totalAudioLen, long totalDataLen, long longSampleRate, int channels, long byteRate) throws Exception {
+                  byte[] header = new byte[44];
+                  header[0] = 'R'; header[1] = 'I'; header[2] = 'F'; header[3] = 'F';
+                  header[4] = (byte) (totalDataLen & 0xff); header[5] = (byte) ((totalDataLen >> 8) & 0xff); header[6] = (byte) ((totalDataLen >> 16) & 0xff); header[7] = (byte) ((totalDataLen >> 24) & 0xff);
+                  header[8] = 'W'; header[9] = 'A'; header[10] = 'V'; header[11] = 'E';
+                  header[12] = 'f'; header[13] = 'm'; header[14] = 't'; header[15] = ' ';
+                  header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; // Subchunk1Size (16 for PCM)
+                  header[20] = 1; header[21] = 0; // AudioFormat (1 for PCM)
+                  header[22] = (byte) channels; header[23] = 0;
+                  header[24] = (byte) (longSampleRate & 0xff); header[25] = (byte) ((longSampleRate >> 8) & 0xff); header[26] = (byte) ((longSampleRate >> 16) & 0xff); header[27] = (byte) ((longSampleRate >> 24) & 0xff);
+                  long byteR = longSampleRate * channels * 2;
+                  header[28] = (byte) (byteR & 0xff); header[29] = (byte) ((byteR >> 8) & 0xff); header[30] = (byte) ((byteR >> 16) & 0xff); header[31] = (byte) ((byteR >> 24) & 0xff);
+                  header[32] = (byte) (channels * 2); header[33] = 0; // BlockAlign
+                  header[34] = 16; header[35] = 0; // BitsPerSample
+                  header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
+                  header[40] = (byte) (totalAudioLen & 0xff); header[41] = (byte) ((totalAudioLen >> 8) & 0xff); header[42] = (byte) ((totalAudioLen >> 16) & 0xff); header[43] = (byte) ((totalAudioLen >> 24) & 0xff);
+                  out.write(header, 0, 44);
+              }
+
+              private void saveToGallery(String path, String name, String mimeType) {
                   File file = new File(path);
                   if (!file.exists()) return;
 
                   ContentValues values = new ContentValues();
-                  values.put(MediaStore.Video.Media.DISPLAY_NAME, "Stabilized_" + System.currentTimeMillis() + ".avi");
-                  values.put(MediaStore.Video.Media.MIME_TYPE, "video/avi");
-                  values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EIS_Camera");
+                  values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                  values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+                  if (mimeType.startsWith("video")) {
+                      values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EIS_Camera");
+                  } else {
+                      values.put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/EIS_Camera");
+                  }
 
-                  Uri uri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
+                  Uri collection = mimeType.startsWith("video") ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
+                  Uri uri = getContentResolver().insert(collection, values);
+                  
                   if (uri != null) {
                       try (OutputStream os = getContentResolver().openOutputStream(uri);
                            InputStream is = new FileInputStream(file)) {
@@ -429,10 +702,7 @@ jobs:
                           while ((read = is.read(buffer)) != -1) {
                               os.write(buffer, 0, read);
                           }
-                          runOnUiThread(() -> Toast.makeText(this, "✅ Сохранено в Галерею!", Toast.LENGTH_LONG).show());
-                      } catch (Exception e) {
-                          e.printStackTrace();
-                      }
+                      } catch (Exception e) { e.printStackTrace(); }
                   }
                   file.delete(); 
               }
@@ -448,7 +718,6 @@ jobs:
                                   .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                   .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888);
 
-                          // СЕКРЕТНОЕ ОРУЖИЕ №1: Отключаем аппаратные OIS и EIS телефона!
                           Camera2Interop.Extender<ImageAnalysis> ext = new Camera2Interop.Extender<>(builder);
                           ext.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF);
                           ext.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF);
@@ -457,48 +726,38 @@ jobs:
                           imageAnalysis.setAnalyzer(cameraExecutor, this::processFrame);
                           
                           cameraProvider.unbindAll();
-                          cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
+                          camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalysis);
+                          
+                          // Применяем стартовый автофокус
+                          updateFocus();
+                          
                       } catch (Exception e) { e.printStackTrace(); }
                   }, ContextCompat.getMainExecutor(this));
               }
 
               private void processFrame(@NonNull ImageProxy image) {
-                  // СЕКРЕТНОЕ ОРУЖИЕ №3: Вычисление Delta Time (Плавность независимо от фризов)
                   long currentTime = System.currentTimeMillis();
                   double dt = 1.0;
                   if (lastFrameTime > 0) {
-                      dt = (currentTime - lastFrameTime) / 33.333; // Нормализация к 30 FPS
+                      dt = (currentTime - lastFrameTime) / 33.333;
                   }
                   lastFrameTime = currentTime;
                   
-                  // СЕКРЕТНОЕ ОРУЖИЕ №2: Трекинг прямо на HD-кадре без "лесенок" округления
                   Mat fullRgba = imageProxyToMat(image);
                   Mat fullGray = new Mat();
                   Imgproc.cvtColor(fullRgba, fullGray, Imgproc.COLOR_RGBA2GRAY);
 
                   int rotation = image.getImageInfo().getRotationDegrees();
-                  if (rotation == 90) {
-                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_CLOCKWISE);
-                      Core.rotate(fullGray, fullGray, Core.ROTATE_90_CLOCKWISE);
-                  } else if (rotation == 270) {
-                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_COUNTERCLOCKWISE);
-                      Core.rotate(fullGray, fullGray, Core.ROTATE_90_COUNTERCLOCKWISE);
-                  } else if (rotation == 180) {
-                      Core.rotate(fullRgba, fullRgba, Core.ROTATE_180);
-                      Core.rotate(fullGray, fullGray, Core.ROTATE_180);
-                  }
+                  if (rotation == 90) { Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_CLOCKWISE); Core.rotate(fullGray, fullGray, Core.ROTATE_90_CLOCKWISE); }
+                  else if (rotation == 270) { Core.rotate(fullRgba, fullRgba, Core.ROTATE_90_COUNTERCLOCKWISE); Core.rotate(fullGray, fullGray, Core.ROTATE_90_COUNTERCLOCKWISE); }
+                  else if (rotation == 180) { Core.rotate(fullRgba, fullRgba, Core.ROTATE_180); Core.rotate(fullGray, fullGray, Core.ROTATE_180); }
 
                   if (actualWidth == 0 || actualHeight == 0) {
-                      actualWidth = fullRgba.cols();
-                      actualHeight = fullRgba.rows();
-                      tmplW = actualWidth / 5; // Большой шаблон для точности
-                      tmplH = actualHeight / 5;
-                      idealX = (actualWidth - tmplW) / 2;
-                      idealY = (actualHeight - tmplH) / 2;
-                      virtualX = idealX;
-                      virtualY = idealY;
-                      lastMatchX = idealX;
-                      lastMatchY = idealY;
+                      actualWidth = fullRgba.cols(); actualHeight = fullRgba.rows();
+                      tmplW = actualWidth / 5; tmplH = actualHeight / 5;
+                      idealX = (actualWidth - tmplW) / 2; idealY = (actualHeight - tmplH) / 2;
+                      virtualX = idealX; virtualY = idealY;
+                      lastMatchX = idealX; lastMatchY = idealY;
                   }
 
                   if (referenceFrame == null) {
@@ -530,34 +789,25 @@ jobs:
 
                   if (minMax.maxVal < 0.4 || isNearEdge || jumpDist > MAX_SHIFT) {
                       triggerSmoothReset(fullGray);
-                      matchX = idealX;
-                      matchY = idealY;
+                      matchX = idealX; matchY = idealY;
                   } else {
-                      lastMatchX = matchX;
-                      lastMatchY = matchY;
+                      lastMatchX = matchX; lastMatchY = matchY;
                   }
 
-                  // Применяем dt к дрейфу для идеальной кинематики
                   double driftFactor = currentDriftSpeed * dt;
-                  if (driftFactor > 1.0) driftFactor = 1.0; // Защита от резкого скачка времени
+                  if (driftFactor > 1.0) driftFactor = 1.0;
                   
                   virtualX += (matchX - virtualX) * driftFactor;
                   virtualY += (matchY - virtualY) * driftFactor;
 
-                  double dx = matchX - virtualX;
-                  double dy = matchY - virtualY;
-
                   Mat M = new Mat(2, 3, CvType.CV_64FC1);
-                  M.put(0, 0, 1, 0, -dx, 0, 1, -dy);
+                  M.put(0, 0, 1, 0, -(matchX - virtualX), 0, 1, -(matchY - virtualY));
 
                   Mat rgbaUI = fullRgba.clone();
-                  
                   if (ghostOffsetX != null && ghostOffsetY != null) {
-                      int gx = matchX + ghostOffsetX;
-                      int gy = matchY + ghostOffsetY;
+                      int gx = matchX + ghostOffsetX; int gy = matchY + ghostOffsetY;
                       Imgproc.rectangle(rgbaUI, new Point(gx, gy), new Point(gx + tmplW, gy + tmplH), new Scalar(255, 255, 0, 255), 4);
                   }
-                  
                   Imgproc.rectangle(rgbaUI, new Point(matchX, matchY), new Point(matchX + tmplW, matchY + tmplH), new Scalar(255, 0, 0, 255), 6);
 
                   Mat stabilizedClean = new Mat();
@@ -566,12 +816,9 @@ jobs:
                   Mat stabilizedUI = new Mat();
                   Imgproc.warpAffine(rgbaUI, stabilizedUI, M, new org.opencv.core.Size(actualWidth, actualHeight), Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, new Scalar(0, 0, 0, 255));
 
-                  // Цифровой кроп (буфер)
                   int cropW = (int) (actualWidth / currentZoom);
                   int cropH = (int) (actualHeight / currentZoom);
-                  int startX = Math.max(0, (actualWidth - cropW) / 2);
-                  int startY = Math.max(0, (actualHeight - cropH) / 2);
-                  Rect cropRect = new Rect(startX, startY, cropW, cropH);
+                  Rect cropRect = new Rect(Math.max(0, (actualWidth - cropW) / 2), Math.max(0, (actualHeight - cropH) / 2), cropW, cropH);
                   org.opencv.core.Size outSize = new org.opencv.core.Size(actualWidth, actualHeight);
 
                   Mat outputCroppedClean = new Mat(stabilizedClean, cropRect);
@@ -596,8 +843,7 @@ jobs:
                   runOnUiThread(() -> imageView.setImageBitmap(displayBitmap));
 
                   fullRgba.release(); fullGray.release(); searchRoi.release(); result.release();
-                  M.release(); rgbaUI.release(); 
-                  stabilizedClean.release(); stabilizedUI.release();
+                  M.release(); rgbaUI.release(); stabilizedClean.release(); stabilizedUI.release();
                   outputCroppedClean.release(); outputResizedClean.release();
                   outputCroppedUI.release(); outputResizedUI.release();
                   image.close();
@@ -605,21 +851,12 @@ jobs:
 
               private void triggerSmoothReset(Mat grayFrame) {
                   if (template == null) return;
-                  
-                  ghostOffsetX = lastMatchX - idealX;
-                  ghostOffsetY = lastMatchY - idealY;
-                  
-                  double currentDx = lastMatchX - virtualX;
-                  double currentDy = lastMatchY - virtualY;
-                  
+                  ghostOffsetX = lastMatchX - idealX; ghostOffsetY = lastMatchY - idealY;
+                  double currentDx = lastMatchX - virtualX; double currentDy = lastMatchY - virtualY;
                   template.release();
                   template = new Mat(grayFrame, new Rect(idealX, idealY, tmplW, tmplH)).clone();
-                  
-                  virtualX = idealX - currentDx;
-                  virtualY = idealY - currentDy;
-                  
-                  lastMatchX = idealX;
-                  lastMatchY = idealY;
+                  virtualX = idealX - currentDx; virtualY = idealY - currentDy;
+                  lastMatchX = idealX; lastMatchY = idealY;
               }
 
               private Mat imageProxyToMat(ImageProxy image) {
@@ -634,8 +871,11 @@ jobs:
               @Override
               protected void onDestroy() {
                   super.onDestroy();
-                  if (isRecording && videoWriter != null) {
-                      videoWriter.release();
+                  if (isRecording && videoWriter != null) videoWriter.release();
+                  if (audioThread != null) audioThread.interrupt();
+                  if (audioRecord != null) {
+                      audioRecord.stop();
+                      audioRecord.release();
                   }
               }
           }
